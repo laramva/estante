@@ -228,7 +228,7 @@ export function mergeStates(a, b) {
   if (!b) return a;
   if (!a) return b;
   const out = emptyState();
-  out.profile = later(a.profileAt, b.profileAt) === 'a' ? (a.profile || b.profile) : (b.profile || a.profile);
+  out.profile = later(a.profileAt, b.profileAt) === 'a' ? Object.assign({}, b.profile, a.profile) : Object.assign({}, a.profile, b.profile);
   out.profileAt = [a.profileAt, b.profileAt].sort().pop() || null;
   out.titles = Object.assign({}, b.titles);
   for (const [k, t] of Object.entries(a.titles || {})) {
