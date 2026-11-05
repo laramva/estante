@@ -1,5 +1,5 @@
 // Faz a Estante abrir e funcionar sem internet.
-const VERSION = 'estante-v1';
+const VERSION = 'estante-v2';
 const SHELL = ['./', 'index.html', 'css/app.css', 'js/app.js', 'js/util.js', 'js/store.js', 'js/meta.js', 'js/sync.js', 'js/importers.js', 'icon.svg', 'manifest.webmanifest', 'tools/filmow-export.js', 'tools/imdb-export.js'];
 
 self.addEventListener('install', (e) => {
@@ -48,7 +48,8 @@ self.addEventListener('fetch', (e) => {
 
   // Arquivos da própria Estante: rede primeiro (sempre a versão nova), cache offline
   if (url.origin === location.origin) {
-    e.respondWith(fetch(req).then((res) => {
+    // no-cache: sempre confere com o servidor, então atualizações do site aparecem na hora
+    e.respondWith(fetch(req, { cache: 'no-cache' }).then((res) => {
       if (res.ok && !url.search) caches.open(VERSION).then((c) => c.put(req, res.clone()));
       return res;
     }).catch(() => caches.match(req, { ignoreSearch: url.pathname.endsWith('library.json') }).then((r) => r || caches.match('index.html'))));
