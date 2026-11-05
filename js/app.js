@@ -38,6 +38,8 @@ function tile(t, opts = {}) {
     (opts.badge !== false && t.kind && t.kind !== 'movie' ? '<span class="badge">' + KIND_LABEL[t.kind] + '</span>' : '') +
     (e.favorite ? '<span class="badge right fav">' + heart() + '</span>' : '') +
     (opts.when ? '<span class="badge date">' + esc(opts.when) + '</span>' : '') +
+    // Sua nota (ou "visto") em todo pôster de título que você já assistiu
+    (e.rating != null ? '<span class="badge rate" title="Sua nota">★ ' + (e.rating / 2).toLocaleString('pt-BR') + '</span>' : e.watched ? '<span class="badge rate seen">✓ visto</span>' : '') +
     '<div class="quick">' +
       '<button type="button" data-q="watched" data-key="' + esc(t.key) + '" class="' + (e.watched ? 'on' : '') + '" title="Já vi" aria-label="Já vi">' + I.check + '</button>' +
       '<button type="button" data-q="watchlist" data-key="' + esc(t.key) + '" class="' + (e.watchlist ? 'on' : '') + '" title="Quero ver" aria-label="Quero ver">' + I.clock + '</button>' +
@@ -80,7 +82,7 @@ async function router() {
       currentRender = () => fn(m.slice(1).map((v) => (v == null ? undefined : decodeURIComponent(v))), params);
       app.classList.remove('page-enter'); void app.offsetWidth; app.classList.add('page-enter');
       await currentRender();
-      const nav = path.split('/')[1] || 'home';
+      const nav = path.startsWith('/estante/avaliacoes') ? 'avaliacoes' : path.split('/')[1] || 'home';
       $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.nav === (nav === 't' || nav === 'busca' || nav === 'explorar' ? '' : nav === 'lista' ? 'listas' : nav)));
       return;
     }
@@ -417,9 +419,10 @@ route(/^\/estante(?:\/([\w-]+))?$/, async ([tab], params) => {
   const kind = params.get('k') || 'all';
   const sort = params.get('o') || 'recentes';
   const q = params.get('q') || '';
+  const rf = params.get('r') || '';
   const counts = Object.fromEntries(Object.keys(S.TABS).map((k) => [k, S.itemsFor(k).length]));
   const nLists = Object.keys(state.lists).length;
-  const link = (patch) => { const u = new URLSearchParams({ k: kind, o: sort, q, ...patch }); for (const [a, b] of [...u]) if (!b || (a === 'k' && b === 'all') || (a === 'o' && b === 'recentes')) u.delete(a); const s = u.toString(); return '#/estante/' + tab + (s ? '?' + s : ''); };
+  const link = (patch) => { const u = new URLSearchParams({ k: kind, o: sort, q, r: rf, ...patch }); for (const [a, b] of [...u]) if (!b || (a === 'k' && b === 'all') || (a === 'o' && b === 'recentes')) u.delete(a); const s = u.toString(); return '#/estante/' + tab + (s ? '?' + s : ''); };
   app.innerHTML =
     '<section class="card profile">' + sparkle('deco') .replace('class="sparkle deco"', 'class="sparkle deco" style="top:22px;right:30px;width:18px;height:18px"') +
       '<div class="photo" style="' + (p.avatar ? 'background-image:url(\'' + esc(p.avatar) + '\')' : '') + '">' + (p.avatar ? '' : esc((p.name || 'L')[0])) + '</div>' +
@@ -434,18 +437,42 @@ route(/^\/estante(?:\/([\w-]+))?$/, async ([tab], params) => {
         '</div></div>' +
     '</section>' +
     '<nav class="tabs">' + Object.entries(S.TABS).map(([k, d]) => '<a href="#/estante/' + k + '" class="' + (k === tab ? 'active' : '') + '">' + d.label + '<span>' + counts[k] + '</span></a>').join('') + '<a href="#/listas">Listas<span>' + nLists + '</span></a></nav>' +
+    (tab === 'avaliacoes' ? ratingSummary(kind, rf, link) : '') +
     '<div class="toolbar"><div class="chips">' + [['all', 'Tudo'], ['movie', 'Filmes'], ['series', 'Séries'], ['anime', 'Animes']].map(([v, n]) => '<a class="chip ' + (kind === v ? 'on' : '') + '" href="' + link({ k: v }) + '">' + n + '</a>').join('') + '</div><span class="spacer"></span>' +
       '<input class="filter-input" id="flt" type="search" placeholder="Filtrar…" value="' + esc(q) + '">' +
       '<select class="chip" id="ord" aria-label="Ordenar">' + [['recentes', 'Mais recentes'], ['antigos', 'Mais antigos'], ['nota', 'Minha nota'], ['titulo', 'Título A–Z'], ['ano', 'Ano de lançamento']].map(([v, n]) => '<option value="' + v + '"' + (sort === v ? ' selected' : '') + '>' + n + '</option>').join('') + '</select></div>' +
     '<div id="shelf"></div>';
   $('#ord').onchange = (e) => (location.hash = link({ o: e.target.value }));
   $('#flt').addEventListener('input', debounce((e) => history.replaceState(null, '', link({ q: e.target.value })) || drawShelf(e.target.value), 250));
-  const drawShelf = (filter) => renderShelf($('#shelf'), tab, kind, sort, filter);
+  const drawShelf = (filter) => renderShelf($('#shelf'), tab, kind, sort, filter, rf);
   drawShelf(q);
 });
 
-function renderShelf(el, tab, kind, sort, filter) {
+// Resumo das avaliações: quantas de cada nota (clique para filtrar)
+function ratingSummary(kind, rf, link) {
+  const items = S.itemsFor('avaliacoes', kind);
+  if (!items.length) return '';
+  const by = {};
+  for (const x of items) by[x.e.rating] = (by[x.e.rating] || 0) + 1;
+  const max = Math.max(...Object.values(by));
+  const avg = items.reduce((s, x) => s + x.e.rating, 0) / items.length / 2;
+  const fromImdb = items.filter((x) => (x.e.sources || []).includes('imdb')).length;
+  const fromFilmow = items.filter((x) => (x.e.sources || []).includes('filmow')).length;
+  let bars = '';
+  for (let r = 10; r >= 1; r--) {
+    const n = by[r] || 0;
+    bars += '<a class="rbar' + (String(r) === rf ? ' on' : '') + '" href="' + link({ r: String(r) === rf ? '' : String(r) }) + '" title="' + (r / 2).toLocaleString('pt-BR') + ' estrelas: ' + n + '">' +
+      '<span class="rlab">' + starsHTML(r) + '</span><span class="rtrack"><i style="width:' + (n ? Math.max(3, (n / max) * 100) : 0) + '%"></i></span><span class="rnum">' + n + '</span></a>';
+  }
+  return '<section class="card pad rsum"><div class="rsum-head"><div><b>' + avg.toFixed(1).replace('.', ',') + '</b>' + starsHTML(Math.round(avg * 2), 'lg') +
+    '<div class="muted small">média de ' + items.length + ' avaliações · ' + fromFilmow + ' do Filmow, ' + fromImdb + ' do IMDb</div>' +
+    (rf ? '<a class="chip on" style="margin-top:10px;display:inline-block" href="' + link({ r: '' }) + '">só ' + (rf / 2).toLocaleString('pt-BR') + ' estrelas ✕</a>' : '<div class="hint">Clique numa barra para ver só aquela nota.</div>') +
+    '</div><div class="rbars">' + bars + '</div></div></section>';
+}
+
+function renderShelf(el, tab, kind, sort, filter, rf) {
   let items = S.itemsFor(tab, kind);
+  if (rf) items = items.filter((x) => String(x.e.rating) === rf);
   if (filter) { const f = norm(filter); items = items.filter((x) => norm(x.t.title + ' ' + (x.t.originalTitle || '') + ' ' + ((x.t.credits && x.t.credits.directors) || []).join(' ')).includes(f)); }
   if (sort === 'antigos') items.reverse();
   if (sort === 'nota') items.sort((a, b) => (b.e.rating ?? -1) - (a.e.rating ?? -1));
@@ -460,7 +487,7 @@ function renderShelf(el, tab, kind, sort, filter) {
   let shown = 0;
   const chrono = sort === 'recentes' || sort === 'antigos';
   const flag = { 'ja-vi': 'approx', 'quero-ver': 'approxWl', favoritos: 'approxFav', avaliacoes: 'approxRated' }[tab];
-  const groupOf = (y) => (!chrono ? 'all' : flag && y.e[flag] ? 'approx' : monthKey(y.date));
+  const groupOf = (y) => (sort === 'nota' ? 'r' + (y.e.rating ?? '-') : !chrono ? 'all' : flag && y.e[flag] ? 'approx' : monthKey(y.date));
   const sizes = {};
   for (const y of items) { const g = groupOf(y); sizes[g] = (sizes[g] || 0) + 1; }
   el.innerHTML = '';
@@ -472,7 +499,7 @@ function renderShelf(el, tab, kind, sort, filter) {
       if (group !== lastGroup) {
         lastGroup = group;
         const n = sizes[group];
-        const label = !chrono ? '' : group === 'approx' ? 'Histórico do Filmow <small>· na ordem em que você marcou, sem data exata</small>' : group === '0000-00' ? 'Sem data' : fmtDate(group + '-15', { month: true });
+        const label = sort === 'nota' ? (group === 'r-' ? 'Sem nota' : starsHTML(+group.slice(1)) + ' ' + (group.slice(1) / 2).toLocaleString('pt-BR') + ' estrelas') : !chrono ? '' : group === 'approx' ? 'Histórico do Filmow <small>· na ordem em que você marcou, sem data exata</small>' : group === '0000-00' ? 'Sem data' : fmtDate(group + '-15', { month: true });
         el.insertAdjacentHTML('beforeend', '<div class="month">' + (label ? '<div class="month-h">' + label + ' <small>' + n + '</small></div>' : '') + '<div class="grid"></div></div>');
         grid = el.lastElementChild.querySelector('.grid');
       }
@@ -573,7 +600,7 @@ function calItem(t, date, label) {
   return '<a class="card cal-item" href="#/t/' + encodeURIComponent(t.key) + '"><div class="when"><b>' + d.getDate() + '</b>' + fmtDate(date).split(' ').slice(1).join(' ') + '</div>' +
     (M.posterUrl(t, 's') ? '<img src="' + esc(M.posterUrl(t, 's')) + '" alt="" loading="lazy">' : '<div class="noimg"></div>') +
     '<div><b>' + esc(t.title) + '</b><div class="small muted">' + esc(KIND_LABEL[t.kind] || '') + ' · ' + esc(label) + ' ' + relDays(date) + '</div></div>' +
-    '<div class="small muted">' + (e.watchlist ? 'no seu Quero ver' : e.watched ? 'você acompanha' : '') + '</div></a>';
+    '<div class="small muted">' + (e.rating != null ? starsHTML(e.rating) + ' ' : '') + (e.watchlist ? 'no seu Quero ver' : e.watched ? 'você acompanha' : '') + '</div></a>';
 }
 
 // ---------- Configurações, sincronização e backup ----------

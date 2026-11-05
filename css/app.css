@@ -162,6 +162,23 @@ main { flex: 1; width: 100%; max-width: var(--maxw); margin: 0 auto; padding: 28
 .badge.fav { background: var(--blue-500); color: #fff; padding: 3px 6px; display: grid; place-items: center; }
 .badge.fav .heart { width: 12px; height: 12px; fill: #fff; stroke: none; }
 .badge.date { top: auto; bottom: 8px; background: rgba(40, 60, 100, .72); color: #fff; }
+.badge.rate { top: auto; bottom: 8px; background: rgba(32, 40, 60, .82); color: var(--gold); font-size: 12px; letter-spacing: .02em; text-transform: none; padding: 2px 9px; }
+.badge.rate.seen { background: rgba(255, 255, 255, .94); color: var(--blue-600); font-size: 10.5px; }
+.badge.date + .badge.rate { bottom: 32px; }
+
+/* Resumo das avaliações */
+.rsum { margin: -6px 0 22px; }
+.rsum-head { display: grid; grid-template-columns: 220px 1fr; gap: 30px; align-items: center; }
+.rsum-head > div:first-child b { display: block; font-size: 48px; line-height: 1; color: var(--blue-600); margin-bottom: 6px; }
+.rbars { display: grid; gap: 4px; }
+.rbar { display: grid; grid-template-columns: 92px 1fr 34px; gap: 10px; align-items: center; color: var(--muted); font-size: 12.5px; padding: 2px 6px; border-radius: 8px; }
+.rbar:hover, .rbar.on { background: var(--blue-50); color: var(--blue-700); }
+.rbar .stars i { width: 13px; height: 13px; }
+.rtrack { height: 9px; background: var(--blue-50); border-radius: 9px; overflow: hidden; }
+.rtrack i { display: block; height: 100%; background: linear-gradient(90deg, var(--blue-300), var(--blue-500)); border-radius: 9px; }
+.rbar.on .rtrack i { background: var(--gold); }
+.rnum { text-align: right; font-weight: 600; }
+.month-h .stars i { width: 13px; height: 13px; }
 .quick {
   position: absolute; right: 8px; bottom: 8px; display: flex; gap: 6px; opacity: 0; transition: .15s;
 }
@@ -392,5 +409,6 @@ footer { border-top: 1px solid var(--line); }
   .cal-item > :last-child { display: none; }
   .h-section { font-size: 21px; }
   .comment { grid-template-columns: 54px 1fr; }
+  .rsum-head { grid-template-columns: 1fr; gap: 16px; }
   .comment img, .comment .noimg { width: 54px; }
 }
