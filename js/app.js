@@ -24,8 +24,15 @@ function posterImg(t, size = 'm') {
   return u ? '<img src="' + esc(u) + '" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.remove()">' : '';
 }
 
+// Título vindo de busca/vitrine que já está na sua estante (mesmo id ou mesmo nome + ano)
+function mine(t) {
+  if (!t || state.titles[t.key]) return t && (state.titles[t.key] || t);
+  return S.findTitle({ imdbId: t.imdbId, tmdbId: t.tmdbId, tmdbType: t.tmdbType, title: t.title, originalTitle: t.originalTitle, year: t.year }) || t;
+}
+
 function tile(t, opts = {}) {
   if (!t) return '';
+  t = mine(t);
   if (!state.titles[t.key]) hints.set(t.key, t);
   const e = state.entries[t.key] || {};
   const sub = [];
@@ -238,7 +245,9 @@ route(/^\/busca\/(.+)$/, async ([q], params) => {
     (local.length ? '<section>' + sectionHead('Na sua estante') + '<div class="grid">' + local.filter((t) => k === 'all' || t.kind === k).slice(0, 24).map((t) => tile(t)).join('') + '</div></section>' : '') +
     '<section class="section">' + sectionHead('Resultados') + '<div id="res">' + loading() + '</div></section>';
   try {
-    const res = (await M.search(q)).filter((t) => k === 'all' || t.kind === k);
+    // Tira dos resultados o que já aparece em "Na sua estante"
+    const shown = new Set(local.map((t) => t.key));
+    const res = (await M.search(q)).filter((t) => (k === 'all' || t.kind === k) && !shown.has(mine(t).key));
     $('#res').innerHTML = res.length ? '<div class="grid">' + res.map((t) => tile(state.titles[t.key] || t)).join('') + '</div>' : empty('Nada encontrado para “' + esc(q) + '”.');
   } catch { $('#res').innerHTML = empty(navigator.onLine ? 'A busca falhou. Tente de novo.' : 'Você está offline — mostrando só o que já está na sua estante.'); }
 });
@@ -456,8 +465,10 @@ function ratingSummary(kind, rf, link) {
   for (const x of items) by[x.e.rating] = (by[x.e.rating] || 0) + 1;
   const max = Math.max(...Object.values(by));
   const avg = items.reduce((s, x) => s + x.e.rating, 0) / items.length / 2;
-  const fromImdb = items.filter((x) => (x.e.sources || []).includes('imdb')).length;
-  const fromFilmow = items.filter((x) => (x.e.sources || []).includes('filmow')).length;
+  // Origem da nota: Filmow (data aproximada), IMDb (data real) ou feita aqui na Estante
+  const fromFilmow = items.filter((x) => x.e.approxRated).length;
+  const fromImdb = items.filter((x) => !x.e.approxRated && (x.e.sources || []).includes('imdb') && x.e.ratedAt < '2026-11-05T11').length;
+  const here = items.length - fromFilmow - fromImdb;
   let bars = '';
   for (let r = 10; r >= 1; r--) {
     const n = by[r] || 0;
@@ -465,7 +476,7 @@ function ratingSummary(kind, rf, link) {
       '<span class="rlab">' + starsHTML(r) + '</span><span class="rtrack"><i style="width:' + (n ? Math.max(3, (n / max) * 100) : 0) + '%"></i></span><span class="rnum">' + n + '</span></a>';
   }
   return '<section class="card pad rsum"><div class="rsum-head"><div><b>' + avg.toFixed(1).replace('.', ',') + '</b>' + starsHTML(Math.round(avg * 2), 'lg') +
-    '<div class="muted small">média de ' + items.length + ' avaliações · ' + fromFilmow + ' do Filmow, ' + fromImdb + ' do IMDb</div>' +
+    '<div class="muted small">média de ' + items.length + ' avaliações · ' + fromFilmow + ' do Filmow, ' + fromImdb + ' do IMDb' + (here ? ', ' + here + ' feitas aqui' : '') + '</div>' +
     (rf ? '<a class="chip on" style="margin-top:10px;display:inline-block" href="' + link({ r: '' }) + '">só ' + (rf / 2).toLocaleString('pt-BR') + ' estrelas ✕</a>' : '<div class="hint">Clique numa barra para ver só aquela nota.</div>') +
     '</div><div class="rbars">' + bars + '</div></div></section>';
 }
@@ -594,6 +605,7 @@ route(/^\/lancamentos$/, async (_, params) => {
 });
 
 function calItem(t, date, label) {
+  t = mine(t);
   if (!state.titles[t.key]) hints.set(t.key, t);
   const d = new Date(date + 'T12:00:00');
   const e = state.entries[t.key] || {};
