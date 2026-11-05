@@ -1,0 +1,13 @@
+{
+  "name": "Estante",
+  "short_name": "Estante",
+  "description": "Minha estante de filmes, séries e animes",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f5f8fd",
+  "theme_color": "#ffffff",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
