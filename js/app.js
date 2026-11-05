@@ -636,6 +636,14 @@ route(/^\/config$/, async () => {
         '<div style="display:flex;gap:10px;margin-top:12px"><button class="btn primary sm" id="ghsave">Testar e salvar</button>' + (s.ghToken ? '<button class="btn sm danger" id="ghforget">Esquecer token</button>' : '') + '</div></details>' +
       '<div style="margin-top:16px"><button class="btn sm" id="syncnow">Sincronizar agora</button></div>' +
     '</section>' +
+    // Outro aparelho
+    '<section class="card pad full"><h3>' + sparkle() + 'Conectar outro aparelho (iPad, celular)</h3>' +
+      (canPush()
+        ? '<p>No iPad, abra a Estante pelo ícone, vá em Configurações e toque em <b>“Escanear QR do computador”</b>. Depois aponte a câmera para o código abaixo. O iPad recebe a sincronização com o GitHub e a chave do TMDB de uma vez — nada é enviado pela internet.</p>' +
+          '<button class="btn primary sm" id="pairshow">Mostrar QR de conexão</button><div id="pairbox"></div>'
+        : '<p>Este aparelho ainda não está sincronizando. Se você já ativou a sincronização no computador, abra lá Configurações → “Mostrar QR de conexão” e escaneie aqui:</p>') +
+      '<div style="margin-top:12px"><button class="btn sm" id="pairscan">Escanear QR do computador</button></div><div id="scanbox"></div>' +
+    '</section>' +
     // TMDB
     '<section class="card pad"><h3>' + sparkle() + 'Dados dos filmes (TMDB)</h3>' +
       '<p>Com a chave gratuita do TMDB você ganha sinopses em português, lançamentos no Brasil, onde assistir e temporadas. Sem ela, a Estante usa Cinemeta (IMDb) e AniList.</p>' +
@@ -684,6 +692,8 @@ route(/^\/config$/, async () => {
     catch (e) { S.saveSettings({ ghToken: prev.ghToken, ghRepo: prev.ghRepo }); toast(e.message, 'error'); }
   };
   if ($('#ghforget')) $('#ghforget').onclick = () => { S.saveSettings({ ghToken: '' }); router(); };
+  if ($('#pairshow')) $('#pairshow').onclick = showPairQR;
+  $('#pairscan').onclick = scanPairQR;
   $('#tmdbsave').onclick = async () => {
     const k = $('#tmdbkey').value.trim();
     if (k.startsWith('•')) return;
@@ -729,6 +739,71 @@ route(/^\/config$/, async () => {
     replaceAndSync(S.mergeStates(state, data));
   }));
 });
+
+// ---------- Parear aparelhos por QR (tela -> câmera, sem passar pela internet) ----------
+const PAIR_PREFIX = 'ESTANTE1:';
+function loadScript(src) {
+  return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('Não consegui carregar ' + src)); document.head.appendChild(s); });
+}
+
+async function showPairQR() {
+  const box = $('#pairbox');
+  const s = S.settings();
+  const gc = ghConfig();
+  const payload = PAIR_PREFIX + btoa(JSON.stringify({ r: gc.repo, b: gc.branch, g: s.ghToken, t: s.tmdbKey || '' }));
+  if (!window.qrcode) await loadScript('vendor/qrcode.min.js');
+  const qr = window.qrcode(0, 'M');
+  qr.addData(payload);
+  qr.make();
+  box.innerHTML = '<div class="pair"><div class="qr"><img alt="QR de conexão" src="' + qr.createDataURL(6, 2) + '"></div>' +
+    '<div><p style="margin-top:0"><b>Escaneie pelo iPad.</b> Este código dá permissão para salvar na sua estante — não mande foto dele para ninguém.</p><p class="hint" id="pairleft">Some sozinho em 2 minutos.</p><button class="btn sm" id="pairhide">Esconder</button></div></div>';
+  $('#pairshow').classList.add('hidden');
+  const hide = () => { box.innerHTML = ''; const b = $('#pairshow'); if (b) b.classList.remove('hidden'); };
+  $('#pairhide').onclick = hide;
+  setTimeout(hide, 120000);
+}
+
+async function scanPairQR() {
+  const box = $('#scanbox');
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { toast('Este navegador não deixa usar a câmera aqui.', 'error'); return; }
+  box.innerHTML = '<div class="scan"><video playsinline muted></video></div><p class="hint">Aponte para o QR na tela do computador.</p><button class="btn sm" id="scanstop">Cancelar</button>';
+  let stream;
+  const stop = () => { if (stream) stream.getTracks().forEach((t) => t.stop()); box.innerHTML = ''; };
+  $('#scanstop').onclick = stop;
+  try {
+    if (!window.jsQR) await loadScript('vendor/jsQR.min.js');
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+  } catch (e) { stop(); toast(e.name === 'NotAllowedError' ? 'Permita o uso da câmera para escanear.' : e.message, 'error'); return; }
+  const video = $('video', box);
+  video.srcObject = stream;
+  await video.play();
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const tick = async () => {
+    if (!document.body.contains(video)) return;
+    if (video.readyState >= 2) {
+      const w = 480, h = Math.round((video.videoHeight / video.videoWidth) * 480) || 480;
+      canvas.width = w; canvas.height = h;
+      ctx.drawImage(video, 0, 0, w, h);
+      const code = window.jsQR(ctx.getImageData(0, 0, w, h).data, w, h);
+      if (code && code.data.startsWith(PAIR_PREFIX)) {
+        stop();
+        try {
+          const p = JSON.parse(atob(code.data.slice(PAIR_PREFIX.length)));
+          const prev = S.settings();
+          S.saveSettings({ ghRepo: p.r, ghBranch: p.b || 'main', ghToken: p.g, tmdbKey: p.t || prev.tmdbKey });
+          await testToken();
+          toast('iPad conectado! Sincronizando…', 'ok');
+          await syncNow();
+          router();
+        } catch (e) { toast('Não deu certo: ' + e.message, 'error'); }
+        return;
+      }
+    }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
 
 function replaceAndSync(s) { S.replaceState(s); toast('Backup restaurado', 'ok'); syncNow(); }
 
