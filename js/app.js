@@ -143,7 +143,7 @@ route(/^\/$/, async () => {
     '<section class="card hero">' +
       sparkle('deco s1') + sparkle('deco s2') +
       '<div><div class="kicker">filmes · séries · animes</div><h1 class="h-display">ESTAN<br>TE</h1>' +
-        '<div class="hero-name">' + esc(p.name) + '</div><div class="hero-sub">' + esc(p.bio || 'colecionando histórias desde ' + new Date(since).getFullYear()) + '</div><div class="rule"></div></div>' +
+        '<div class="hero-name">' + esc(p.name) + '</div><div class="hero-sub">' + esc(p.bio || 'colecionando histórias desde ' + (p.since || new Date(since).getFullYear())) + '</div><div class="rule"></div></div>' +
       '<div><div class="fan">' + favs.filter((x) => M.posterUrl(x.t)).slice(0, 3).map((x, i) => '<a href="#/t/' + encodeURIComponent(x.key) + '" class="f' + i + '"><img src="' + esc(M.posterUrl(x.t)) + '" alt="' + esc(x.t.title) + '" referrerpolicy="no-referrer"></a>').join('') + '</div>' +
       '<div class="hero-stats">' +
         '<a class="stat" href="#/estante/ja-vi"><b>' + st.watched + '</b><span>já vi</span></a>' +

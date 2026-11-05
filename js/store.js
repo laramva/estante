@@ -7,7 +7,7 @@ const KEY = 'state';
 
 export const emptyState = () => ({
   schema: 1,
-  profile: { name: 'Lara', bio: '', avatar: '', imdb: 'p.hccoueu5wqm2e4nk2id7zarygq', filmow: 'larabaldini' },
+  profile: { name: 'Lara', bio: '', avatar: '', since: 2012, imdb: 'p.hccoueu5wqm2e4nk2id7zarygq', filmow: 'larabaldini' },
   titles: {},
   entries: {},
   lists: {},
