@@ -308,7 +308,7 @@ export async function shelf(id, page = 1, extra = {}) {
       'movie-top': () => tmdb('/discover/movie', { sort_by: 'vote_average.desc', 'vote_count.gte': 3000, page, ...g }).then((r) => r.results.map((x) => fromTmdbItem(x, 'movie'))),
       'movie-now': () => tmdb('/movie/now_playing', { region: 'BR', page }).then((r) => r.results.map((x) => fromTmdbItem(x, 'movie'))),
       // Estreias nos cinemas do Brasil (tipos 2 e 3 = cinema), com a data brasileira
-      'movie-upcoming': () => tmdb('/discover/movie', { region: 'BR', 'release_date.gte': plusDays(1), 'release_date.lte': plusDays(180), with_release_type: '2|3', sort_by: 'popularity.desc', page }).then((r) => r.results.map((x) => fromTmdbItem(x, 'movie'))),
+      'movie-upcoming': () => tmdb('/discover/movie', { region: 'BR', 'release_date.gte': plusDays(1), 'release_date.lte': plusDays(180), 'primary_release_date.gte': plusDays(-365), with_release_type: '2|3', sort_by: 'popularity.desc', page }).then((r) => r.results.map((x) => fromTmdbItem(x, 'movie'))),
       'series-popular': () => tmdb('/discover/tv', { sort_by: 'popularity.desc', without_genres: extra.genre ? '' : '10767,10763,10764', page, ...g }).then((r) => r.results.map((x) => fromTmdbItem(x, 'tv'))),
       'series-top': () => tmdb('/discover/tv', { sort_by: 'vote_average.desc', 'vote_count.gte': 1500, page, ...g }).then((r) => r.results.map((x) => fromTmdbItem(x, 'tv'))),
       'series-airing': () => tmdb('/tv/on_the_air', { page }).then((r) => r.results.map((x) => fromTmdbItem(x, 'tv'))),
