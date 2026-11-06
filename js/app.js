@@ -2,7 +2,7 @@ import { $, $$, esc, fmtDate, monthKey, relDays, fmtRuntime, starsHTML, KIND_LAB
 import * as S from './store.js';
 import { state } from './store.js';
 import * as M from './meta.js';
-import { importFile } from './importers.js';
+import { importFile, migrateFilmowSeasons } from './importers.js';
 import { syncNow, onSyncStatus, syncStatus, ghConfig, canPush, testToken, pullPublic } from './sync.js';
 
 const app = $('#app');
@@ -35,21 +35,31 @@ function tile(t, opts = {}) {
   t = mine(t);
   if (!state.titles[t.key]) hints.set(t.key, t);
   const e = state.entries[t.key] || {};
+  const n = opts.season || null;
+  // Numa temporada, as marcações são as daquela temporada; senão, as do título
+  const f = n ? (e.seasons || {})[n] || {} : e;
+  const seasonInfo = n && (t.seasons || []).find((s) => s.n === n);
+  const pt = n && seasonInfo && seasonInfo.poster ? Object.assign({}, t, { poster: seasonInfo.poster }) : t;
+  const seenSeasons = !n ? Object.values(e.seasons || {}).filter((s) => s.watched).length : 0;
   const sub = [];
+  if (n) sub.push(n + 'ª temporada');
   if (opts.date) sub.push(esc(opts.date));
-  else if (t.year) sub.push(t.year);
-  const rating = e.rating != null ? starsHTML(e.rating) : '';
-  const subline = rating && opts.date ? rating + '<span>' + esc(opts.date) + '</span>' : rating || sub.join(' · ');
-  return '<a class="tile" href="#/t/' + encodeURIComponent(t.key) + '">' +
-    '<div class="poster"><div class="noimg">' + esc(t.title) + '</div>' + posterImg(t) +
-    (opts.badge !== false && t.kind && t.kind !== 'movie' ? '<span class="badge">' + KIND_LABEL[t.kind] + '</span>' : '') +
-    (e.favorite ? '<span class="badge right fav">' + heart() + '</span>' : '') +
+  else if (!n && t.year) sub.push(t.year);
+  const rating = f.rating != null ? starsHTML(f.rating) : '';
+  const subline = rating ? rating + (sub.length ? '<span>' + sub.join(' · ') + '</span>' : '') : sub.join(' · ');
+  const q = n ? 's' : '';
+  return '<a class="tile" href="#/t/' + encodeURIComponent(t.key) + (n ? '?s=' + n : '') + '">' +
+    '<div class="poster"><div class="noimg">' + esc(t.title) + (n ? '<br>T' + n : '') + '</div>' + posterImg(pt) +
+    (n ? '<span class="badge">T' + n + '</span>' : opts.badge !== false && t.kind && t.kind !== 'movie' ? '<span class="badge">' + KIND_LABEL[t.kind] + '</span>' : '') +
+    (e.favorite && !n ? '<span class="badge right fav">' + heart() + '</span>' : '') +
     (opts.when ? '<span class="badge date">' + esc(opts.when) + '</span>' : '') +
-    // Sua nota (ou "visto") em todo pôster de título que você já assistiu
-    (e.rating != null ? '<span class="badge rate" title="Sua nota">★ ' + (e.rating / 2).toLocaleString('pt-BR') + '</span>' : e.watched ? '<span class="badge rate seen">✓ visto</span>' : '') +
+    // Sua nota (ou "visto") em todo pôster do que você já assistiu
+    (f.rating != null ? '<span class="badge rate" title="Sua nota">★ ' + (f.rating / 2).toLocaleString('pt-BR') + '</span>'
+      : f.watched ? '<span class="badge rate seen">✓ visto</span>'
+      : seenSeasons ? '<span class="badge rate seen">✓ ' + seenSeasons + ' temp.</span>' : '') +
     '<div class="quick">' +
-      '<button type="button" data-q="watched" data-key="' + esc(t.key) + '" class="' + (e.watched ? 'on' : '') + '" title="Já vi" aria-label="Já vi">' + I.check + '</button>' +
-      '<button type="button" data-q="watchlist" data-key="' + esc(t.key) + '" class="' + (e.watchlist ? 'on' : '') + '" title="Quero ver" aria-label="Quero ver">' + I.clock + '</button>' +
+      '<button type="button" data-q="' + q + 'watched" data-key="' + esc(t.key) + '"' + (n ? ' data-s="' + n + '"' : '') + ' class="' + (f.watched ? 'on' : '') + '" title="Já vi" aria-label="Já vi">' + I.check + '</button>' +
+      '<button type="button" data-q="' + q + 'watchlist" data-key="' + esc(t.key) + '"' + (n ? ' data-s="' + n + '"' : '') + ' class="' + (f.watchlist ? 'on' : '') + '" title="Quero ver" aria-label="Quero ver">' + I.clock + '</button>' +
     '</div></div>' +
     '<div class="t">' + esc(t.title) + '</div>' +
     '<div class="s">' + subline + '</div></a>';
@@ -127,13 +137,20 @@ document.addEventListener('click', async (ev) => {
     const key = await ensureStored(b.dataset.key);
     const e = state.entries[key] || {};
     rerenderLock = true;
+    const n = +b.dataset.s || 0;
+    const s = n ? S.seasonOf(key, n) : null;
+    const t = state.titles[key] || {};
+    const total = (t.seasons || []).length;
+    const eps = n ? ((t.seasons || []).find((x) => x.n === n) || {}).episodes : 0;
     if (b.dataset.q === 'watched') { S.setWatched(key, !e.watched); toast(!e.watched ? 'Marcado como já visto ✓' : 'Removido de Já vi', 'ok'); }
     if (b.dataset.q === 'watchlist') { S.setWatchlist(key, !e.watchlist); toast(!e.watchlist ? 'Adicionado em Quero ver' : 'Removido de Quero ver', 'ok'); }
-    const ne = state.entries[key] || {};
+    if (b.dataset.q === 'swatched') { S.setSeasonWatched(key, n, !s.watched, { episodes: eps, totalSeasons: total }); toast((!s.watched ? 'Temporada ' + n + ' vista ✓' : 'Temporada ' + n + ' desmarcada'), 'ok'); }
+    if (b.dataset.q === 'swatchlist') { S.setSeasonWatchlist(key, n, !s.watchlist); toast(!s.watchlist ? 'Temporada ' + n + ' em Quero ver' : 'Removida de Quero ver', 'ok'); }
+    const nf = n ? S.seasonOf(key, n) : state.entries[key] || {};
     const tileEl = b.closest('.tile');
     if (tileEl) {
-      tileEl.querySelector('[data-q="watched"]').classList.toggle('on', !!ne.watched);
-      tileEl.querySelector('[data-q="watchlist"]').classList.toggle('on', !!ne.watchlist);
+      tileEl.querySelector('[data-q$="watched"]').classList.toggle('on', !!nf.watched);
+      tileEl.querySelector('[data-q$="watchlist"]').classList.toggle('on', !!nf.watchlist);
     }
   } catch (err) { toast(err.message, 'error'); }
   finally { b.disabled = false; setTimeout(() => (rerenderLock = false), 400); }
@@ -162,9 +179,9 @@ route(/^\/$/, async () => {
       '</div></div>' +
     '</section>' +
     tmdbNotice() +
-    '<section class="section">' + sectionHead('Vistos recentemente', '#/estante/ja-vi') + (recent.length ? '<div class="row">' + recent.map((x) => tile(x.t, { date: x.e.approx ? 'Filmow' : fmtDate(x.date) })).join('') + '</div>' : empty('Marque o que você assistiu e ele aparece aqui.')) + '</section>' +
+    '<section class="section">' + sectionHead('Vistos recentemente', '#/estante/ja-vi') + (recent.length ? '<div class="row">' + recent.map((x) => tile(x.t, { season: x.season, date: x.f.approx ? 'Filmow' : fmtDate(x.date) })).join('') + '</div>' : empty('Marque o que você assistiu e ele aparece aqui.')) + '</section>' +
     (soon.length ? '<section class="section">' + sectionHead('Chegando na sua estante', '#/lancamentos') + '<div class="row">' + soon.map((x) => tile(x.t, { when: relDays(x.date), date: x.label })).join('') + '</div></section>' : '') +
-    '<section class="section">' + sectionHead('Quero ver', '#/estante/quero-ver') + (want.length ? '<div class="row">' + want.map((x) => tile(x.t)).join('') + '</div>' : empty('Sua lista de quero ver está vazia.')) + '</section>' +
+    '<section class="section">' + sectionHead('Quero ver', '#/estante/quero-ver') + (want.length ? '<div class="row">' + want.map((x) => tile(x.t, { season: x.season })).join('') + '</div>' : empty('Sua lista de quero ver está vazia.')) + '</section>' +
     '<section class="section">' + sectionHead('Favoritos', '#/estante/favoritos') + (favs.length ? '<div class="row">' + favs.map((x) => tile(x.t)).join('') + '</div>' : empty('Nenhum favorito ainda.')) + '</section>' +
     '<section class="section">' + sectionHead('Em cartaz', '#/lancamentos') + '<div id="home-now">' + skeletonRow() + '</div></section>';
   fillShelf($('#home-now'), () => (M.hasTmdb() ? M.shelf('movie-now') : M.shelf('anime-airing')));
@@ -253,10 +270,15 @@ route(/^\/busca\/(.+)$/, async ([q], params) => {
 });
 
 // ---------- Página do título ----------
-route(/^\/t\/(.+)$/, async ([key]) => {
+route(/^\/t\/(.+)$/, async ([key], params) => {
   let t = state.titles[key] || hints.get(key);
+  // Veio de um pôster de temporada: rola até ela e destaca
+  const focusSeason = () => {
+    const el = params.get('s') && $('#season-' + params.get('s'));
+    if (el) { el.scrollIntoView({ block: 'center' }); el.classList.add('flash'); }
+  };
   app.innerHTML = t ? titleHTML(t, true) : loading();
-  if (t) bindTitle(t);
+  if (t) { bindTitle(t); focusSeason(); }
   let d = null;
   try { d = await M.details(key, t || {}); } catch (e) { console.warn(e); }
   if (!d && !t) { app.innerHTML = empty('Não encontrei esse título' + (navigator.onLine ? '.' : ' (offline).')); return; }
@@ -278,9 +300,11 @@ route(/^\/t\/(.+)$/, async ([key]) => {
       hints.set(key, d);
       if (d.key !== key) hints.set(d.key, d);
     }
-    if (location.hash.slice(3) !== encodeURIComponent(key) && decodeURIComponent(location.hash.slice(4)) !== key) return;
+    if (decodeURIComponent(location.hash.slice(4).split('?')[0]) !== key) return;
+    const y = window.scrollY;
     app.innerHTML = titleHTML(t, false);
     bindTitle(t);
+    if (params.get('s')) focusSeason(); else window.scrollTo(0, y);
   }
 });
 
@@ -330,7 +354,16 @@ function titleHTML(t, partial) {
       '<div class="field" style="margin-top:18px"><label for="cmt">Seu comentário</label><textarea class="input" id="cmt" placeholder="O que você achou?">' + esc(e.comment || '') + '</textarea>' +
         '<div style="display:flex;gap:10px;align-items:center;margin-top:8px"><button class="btn sm primary" data-act="comment">Salvar comentário</button>' + (e.commentAt ? '<span class="hint" style="margin:0">salvo em ' + fmtDate(e.commentAt) + '</span>' : '') + '</div></div>' +
     '</div></div></section>' +
-    (t.seasons && t.seasons.length ? '<section class="section">' + sectionHead('Temporadas') + '<div class="seasons">' + t.seasons.map((s) => seasonHTML(t, e, s)).join('') + '</div></section>' : '') +
+    (isEpisodic(t) ? (() => {
+      const list = seasonList(t, e);
+      const seen = list.filter((s) => ((e.seasons || {})[s.n] || {}).watched).length;
+      const next = (list.length ? list[list.length - 1].n : 0) + 1;
+      return '<section class="section" id="temporadas">' + sectionHead('Temporadas') +
+        '<p class="small muted" style="margin-top:-8px">Marque cada temporada como no Filmow' + (list.length ? ' · ' + seen + ' de ' + list.length + ' vistas' : '') + '.</p>' +
+        '<div class="seasons">' + list.map((s) => seasonHTML(t, e, s)).join('') + '</div>' +
+        (!(t.seasons || []).length ? '<button class="btn sm" data-addseason="' + next + '" style="margin-top:12px">' + I.plus + 'Temporada ' + next + '</button><div class="hint">Os dados das temporadas aparecem quando o TMDB atualizar este título.</div>' : '') +
+        '</section>';
+    })() : '') +
     (t.providers && (t.providers.stream.length || t.providers.rent.length) ? '<section class="section">' + sectionHead('Onde assistir') + '<div class="card pad"><div class="providers">' + t.providers.stream.map((p) => '<img src="' + esc(p.logo) + '" alt="' + esc(p.name) + '" title="' + esc(p.name) + ' (assinatura)">').join('') + (t.providers.rent.length ? '<span class="muted small" style="margin:0 6px">alugar/comprar:</span>' + t.providers.rent.slice(0, 6).map((p) => '<img src="' + esc(p.logo) + '" alt="' + esc(p.name) + '" title="' + esc(p.name) + '">').join('') : '') + '</div><div class="hint">Dados de streaming: JustWatch via TMDB · <a href="' + esc(t.providers.link) + '" target="_blank" rel="noopener">ver ofertas</a></div></div></section>' : '') +
     ((t.credits && (t.credits.directors || []).length) || (t.credits && (t.credits.cast || []).length) ? '<section class="section">' + sectionHead('Elenco e equipe') + '<div class="card pad">' +
       ((t.credits.directors || []).length ? '<p style="margin:0 0 14px"><span class="muted">' + dirLabel + ':</span> ' + esc(t.credits.directors.join(', ')) + '</p>' : '') +
@@ -347,12 +380,35 @@ function rateWidget(rating) {
   return h + '<span class="rate-label">' + (rating != null ? (rating / 2).toLocaleString('pt-BR') + ' de 5' : 'sem nota') + '</span>' + (rating != null ? '<button type="button" class="clear" data-star="0">limpar</button>' : '') + '</div><div class="hint">Clique na metade esquerda da estrela para meia estrela.</div>';
 }
 
+// Temporadas conhecidas: as do TMDB/IMDb + as que você já marcou (mesmo sem dados online)
+function seasonList(t, e) {
+  const list = (t.seasons || []).map((s) => Object.assign({}, s));
+  for (const n of Object.keys(e.seasons || {})) if (!list.some((s) => s.n === +n)) list.push({ n: +n, name: 'Temporada ' + n });
+  return list.sort((a, b) => a.n - b.n);
+}
+const isEpisodic = (t) => t.tmdbType === 'tv' || /tvSeries|tvMiniSeries/.test(t.imdbType || '') || (t.seasons && t.seasons.length) || (t.kind !== 'movie' && t.animeFormat !== 'MOVIE' && !t.tmdbType && !t.imdbType);
+
 function seasonHTML(t, e, s) {
-  const done = (e.progress && e.progress[s.n]) || 0;
-  const pct = s.episodes ? Math.round((done / s.episodes) * 100) : 0;
-  return '<div class="season"><div class="sp" style="' + (s.poster ? 'background-image:url(\'' + esc(s.poster) + '\')' : '') + '"></div><div class="info"><b>' + esc(s.name || 'Temporada ' + s.n) + '</b>' +
-    '<span class="muted">' + done + '/' + (s.episodes || '?') + ' episódios' + (s.airDate ? ' · ' + s.airDate.slice(0, 4) : '') + '</span><div class="progress"><i style="width:' + pct + '%"></i></div></div>' +
-    '<div class="stepper"><button type="button" data-ep="' + s.n + '" data-d="-1" aria-label="Menos um episódio">−</button><button type="button" data-ep="' + s.n + '" data-d="1" aria-label="Mais um episódio">+</button><button type="button" data-ep="' + s.n + '" data-d="all" title="Marcar temporada inteira" aria-label="Temporada inteira">✓</button></div></div>';
+  const st = (e.seasons || {})[s.n] || {};
+  // Temporada vista sem contagem de episódios (ex.: veio do Filmow) conta como completa
+  const done = (e.progress && e.progress[s.n]) || (st.watched ? s.episodes || 0 : 0);
+  const pct = s.episodes ? Math.round((done / s.episodes) * 100) : st.watched ? 100 : 0;
+  const v = st.rating == null ? 0 : st.rating / 2;
+  let stars = '<div class="rate sm" data-srate="' + s.n + '">';
+  for (let i = 1; i <= 5; i++) stars += '<button type="button" data-sstar="' + i + '" class="' + (v >= i ? 'on' : v >= i - 0.5 ? 'half' : '') + '" aria-label="' + i + ' estrela' + (i > 1 ? 's' : '') + ' na temporada ' + s.n + '"><i></i></button>';
+  stars += (st.rating != null ? '<button type="button" class="clear" data-sstar="0">limpar</button>' : '') + '</div>';
+  const status = st.watched ? 'vista' + (st.watchedAt && !st.approx ? ' em ' + fmtDate(st.watchedAt) : st.approx ? ' (Filmow)' : '') : st.watchlist ? 'em Quero ver' : '';
+  return '<div class="season' + (st.watched ? ' seen' : '') + '" id="season-' + s.n + '">' +
+    '<div class="sp" style="' + (s.poster ? 'background-image:url(\'' + esc(s.poster) + '\')' : '') + '">' + (s.poster ? '' : 'T' + s.n) + '</div>' +
+    '<div class="info"><b>' + esc(s.name || 'Temporada ' + s.n) + '</b>' +
+      '<span class="muted">' + (s.episodes ? done + '/' + s.episodes + ' episódios' : 'episódios: ' + done) + (s.airDate ? ' · ' + s.airDate.slice(0, 4) : '') + (status ? ' · <b class="st">' + status + '</b>' : '') + '</span>' +
+      '<div class="progress"><i style="width:' + pct + '%"></i></div>' +
+      '<div class="season-actions">' +
+        '<button type="button" class="btn sm ' + (st.watched ? 'on' : '') + '" data-sact="watched" data-n="' + s.n + '">' + I.check + 'Vi</button>' +
+        '<button type="button" class="btn sm ' + (st.watchlist ? 'on' : '') + '" data-sact="watchlist" data-n="' + s.n + '">' + I.clock + 'Quero ver</button>' +
+        stars +
+        '<div class="stepper" title="Episódios vistos"><button type="button" data-ep="' + s.n + '" data-d="-1" aria-label="Menos um episódio">−</button><button type="button" data-ep="' + s.n + '" data-d="1" aria-label="Mais um episódio">+</button></div>' +
+      '</div></div></div>';
 }
 
 function bindTitle(t) {
@@ -364,7 +420,15 @@ function bindTitle(t) {
     const k = await store().catch((er) => { toast(er.message, 'error'); return null; });
     if (!k) return;
     const e = state.entries[k] || {};
-    if (act === 'watched') S.setWatched(k, !e.watched);
+    if (act === 'watched') {
+      // Série com temporadas: "Já vi" marca (ou desmarca) todas as temporadas
+      const list = isEpisodic(t) ? seasonList(t, e) : [];
+      if (list.length) {
+        const all = list.every((s) => ((e.seasons || {})[s.n] || {}).watched);
+        for (const s of list) if (!!((state.entries[k].seasons || {})[s.n] || {}).watched === all) S.setSeasonWatched(k, s.n, !all, { episodes: s.episodes, totalSeasons: list.length });
+        if (all) S.setWatched(k, false);
+      } else S.setWatched(k, !e.watched);
+    }
     if (act === 'watchlist') S.setWatchlist(k, !e.watchlist);
     if (act === 'favorite') S.setFavorite(k, !e.favorite);
     if (act === 'comment') { S.setComment(k, $('#cmt').value.trim()); toast('Comentário salvo', 'ok'); }
@@ -385,16 +449,42 @@ function bindTitle(t) {
   });
   const wd = $('#wdate');
   if (wd) wd.addEventListener('change', () => { if (wd.value) { S.setWatchedDate(key, fromDateInput(wd.value)); toast('Data salva', 'ok'); } });
+  const seasonsNow = () => seasonList(Object.assign({}, t, state.titles[key] || {}), state.entries[key] || {});
   $$('[data-ep]', app).forEach((b) => b.addEventListener('click', async () => {
     const k = await store();
     if (!k) return;
-    const s = (t.seasons || []).find((x) => x.n === +b.dataset.ep);
+    const s = seasonsNow().find((x) => x.n === +b.dataset.ep);
     const cur = ((state.entries[k] || {}).progress || {})[s.n] || 0;
-    const next = b.dataset.d === 'all' ? s.episodes || cur : Math.max(0, Math.min(s.episodes || 999, cur + +b.dataset.d));
+    const next = Math.max(0, Math.min(s.episodes || 999, cur + +b.dataset.d));
     S.setProgress(k, s.n, next);
-    const e = state.entries[k];
-    const allDone = (t.seasons || []).every((x) => ((e.progress || {})[x.n] || 0) >= (x.episodes || 1));
-    if (allDone && !e.watched) { S.setWatched(k, true); toast('Série completa! Marcada como vista ✓', 'ok'); }
+    // Terminou a temporada pelo contador: ela vira "vista"
+    if (s.episodes && next >= s.episodes && !S.seasonOf(k, s.n).watched) { S.setSeasonWatched(k, s.n, true, { episodes: s.episodes, totalSeasons: (t.seasons || []).length }); toast('Temporada ' + s.n + ' completa ✓', 'ok'); }
+    refresh();
+  }));
+  $$('[data-sact]', app).forEach((b) => b.addEventListener('click', async () => {
+    const k = await store();
+    if (!k) return;
+    const n = +b.dataset.n;
+    const s = seasonsNow().find((x) => x.n === n) || { n };
+    const cur = S.seasonOf(k, n);
+    if (b.dataset.sact === 'watched') { S.setSeasonWatched(k, n, !cur.watched, { episodes: s.episodes, totalSeasons: (t.seasons || []).length }); toast(!cur.watched ? 'Temporada ' + n + ' vista ✓' : 'Temporada ' + n + ' desmarcada', 'ok'); }
+    if (b.dataset.sact === 'watchlist') S.setSeasonWatchlist(k, n, !cur.watchlist);
+    refresh();
+  }));
+  $$('[data-srate]', app).forEach((box) => box.addEventListener('click', async (ev) => {
+    const b = ev.target.closest('[data-sstar]');
+    if (!b) return;
+    const k = await store();
+    if (!k) return;
+    const n = +box.dataset.srate;
+    const star = +b.dataset.sstar;
+    S.setSeasonRating(k, n, star ? star * 2 - (ev.offsetX < b.clientWidth / 2 ? 1 : 0) : null);
+    refresh();
+  }));
+  $$('[data-addseason]', app).forEach((b) => b.addEventListener('click', async () => {
+    const k = await store();
+    if (!k) return;
+    S.setSeasonWatched(k, +b.dataset.addseason, true, {});
     refresh();
   }));
 }
@@ -462,12 +552,12 @@ function ratingSummary(kind, rf, link) {
   const items = S.itemsFor('avaliacoes', kind);
   if (!items.length) return '';
   const by = {};
-  for (const x of items) by[x.e.rating] = (by[x.e.rating] || 0) + 1;
+  for (const x of items) by[x.rating] = (by[x.rating] || 0) + 1;
   const max = Math.max(...Object.values(by));
-  const avg = items.reduce((s, x) => s + x.e.rating, 0) / items.length / 2;
+  const avg = items.reduce((s, x) => s + x.rating, 0) / items.length / 2;
   // Origem da nota: Filmow (data aproximada), IMDb (data real) ou feita aqui na Estante
-  const fromFilmow = items.filter((x) => x.e.approxRated).length;
-  const fromImdb = items.filter((x) => !x.e.approxRated && (x.e.sources || []).includes('imdb') && x.e.ratedAt < '2026-11-05T11').length;
+  const fromFilmow = items.filter((x) => x.f.approxRated).length;
+  const fromImdb = items.filter((x) => !x.f.approxRated && !x.season && (x.e.sources || []).includes('imdb') && x.e.ratedAt < '2026-11-05T11').length;
   const here = items.length - fromFilmow - fromImdb;
   let bars = '';
   for (let r = 10; r >= 1; r--) {
@@ -483,10 +573,10 @@ function ratingSummary(kind, rf, link) {
 
 function renderShelf(el, tab, kind, sort, filter, rf) {
   let items = S.itemsFor(tab, kind);
-  if (rf) items = items.filter((x) => String(x.e.rating) === rf);
+  if (rf) items = items.filter((x) => String(x.rating) === rf);
   if (filter) { const f = norm(filter); items = items.filter((x) => norm(x.t.title + ' ' + (x.t.originalTitle || '') + ' ' + ((x.t.credits && x.t.credits.directors) || []).join(' ')).includes(f)); }
   if (sort === 'antigos') items.reverse();
-  if (sort === 'nota') items.sort((a, b) => (b.e.rating ?? -1) - (a.e.rating ?? -1));
+  if (sort === 'nota') items.sort((a, b) => (b.rating ?? -1) - (a.rating ?? -1));
   if (sort === 'titulo') items.sort((a, b) => a.t.title.localeCompare(b.t.title, 'pt-BR'));
   if (sort === 'ano') items.sort((a, b) => (b.t.year || 0) - (a.t.year || 0));
   if (!items.length) { el.innerHTML = empty(filter ? 'Nada encontrado com esse filtro.' : 'Nada aqui ainda. <a href="#/busca/">Busque</a> algo para adicionar.'); return; }
@@ -498,7 +588,7 @@ function renderShelf(el, tab, kind, sort, filter, rf) {
   let shown = 0;
   const chrono = sort === 'recentes' || sort === 'antigos';
   const flag = { 'ja-vi': 'approx', 'quero-ver': 'approxWl', favoritos: 'approxFav', avaliacoes: 'approxRated' }[tab];
-  const groupOf = (y) => (sort === 'nota' ? 'r' + (y.e.rating ?? '-') : !chrono ? 'all' : flag && y.e[flag] ? 'approx' : monthKey(y.date));
+  const groupOf = (y) => (sort === 'nota' ? 'r' + (y.rating ?? '-') : !chrono ? 'all' : flag && y.f[flag] ? 'approx' : monthKey(y.date));
   const sizes = {};
   for (const y of items) { const g = groupOf(y); sizes[g] = (sizes[g] || 0) + 1; }
   el.innerHTML = '';
@@ -514,7 +604,7 @@ function renderShelf(el, tab, kind, sort, filter, rf) {
         el.insertAdjacentHTML('beforeend', '<div class="month">' + (label ? '<div class="month-h">' + label + ' <small>' + n + '</small></div>' : '') + '<div class="grid"></div></div>');
         grid = el.lastElementChild.querySelector('.grid');
       }
-      grid.insertAdjacentHTML('beforeend', tile(x.t, { date: chrono && group !== 'approx' ? fmtDate(x.date) : null }));
+      grid.insertAdjacentHTML('beforeend', tile(x.t, { season: x.season, date: chrono && group !== 'approx' ? fmtDate(x.date) : null }));
     }
     shown += slice.length;
     $('#shelf-more') && $('#shelf-more').remove();
@@ -916,6 +1006,11 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
   paintChrome();
   await router();
   dailyBackup();
-  syncNow().then(() => backgroundRefresh());
+  // Primeiro puxa o que veio dos outros aparelhos; depois a migração das temporadas (roda uma vez só, em qualquer aparelho)
+  syncNow().then(async () => {
+    const r = await migrateFilmowSeasons().catch((e) => { console.warn('migração', e); return null; });
+    if (r) { toast('Séries organizadas por temporada ✓', 'ok'); syncNow(); }
+    backgroundRefresh();
+  });
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 })();

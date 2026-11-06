@@ -296,9 +296,18 @@ textarea.input { min-height: 110px; resize: vertical; }
 .providers { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .providers img { width: 40px; height: 40px; border-radius: 10px; box-shadow: var(--shadow); }
 
-.seasons { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
-.season { display: flex; gap: 12px; align-items: center; padding: 12px; border-radius: var(--radius-sm); background: var(--blue-50); }
-.season .sp { width: 44px; height: 64px; border-radius: 8px; background: var(--blue-200) center/cover; flex-shrink: 0; }
+.seasons { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
+.season { display: flex; gap: 14px; align-items: flex-start; padding: 14px; border-radius: var(--radius-sm); background: var(--paper); box-shadow: var(--shadow); border: 2px solid transparent; transition: border-color .3s; }
+.season.seen { background: var(--blue-50); }
+.season.flash { border-color: var(--blue-400); }
+.season .sp { width: 64px; height: 94px; border-radius: 10px; background: var(--blue-200) center/cover; flex-shrink: 0; display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 18px; }
+.season .st { color: var(--blue-600); font-weight: 600; }
+.season-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.season-actions .btn.sm { height: 32px; padding: 0 12px; font-size: 12.5px; }
+.season-actions .btn svg { width: 15px; height: 15px; }
+.rate.sm button { width: 24px; height: 24px; }
+.rate.sm button i { inset: 2px; }
+.rate.sm .clear { width: auto; height: auto; font-size: 11px; margin-left: 4px; }
 .season .info { flex: 1; min-width: 0; font-size: 13px; }
 .season .info b { display: block; font-size: 14px; }
 .progress { height: 5px; background: var(--blue-200); border-radius: 5px; overflow: hidden; margin-top: 6px; }
@@ -437,5 +446,6 @@ footer { border-top: 1px solid var(--line); }
   .h-section { font-size: 21px; }
   .comment { grid-template-columns: 54px 1fr; }
   .rsum-head { grid-template-columns: 1fr; gap: 16px; }
+  .seasons { grid-template-columns: 1fr; }
   .comment img, .comment .noimg { width: 54px; }
 }

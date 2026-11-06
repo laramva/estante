@@ -10,6 +10,17 @@ export const onSyncStatus = (fn) => listeners.add(fn);
 export const syncStatus = () => status;
 function setStatus(s) { status = Object.assign({}, status, s); for (const fn of listeners) fn(status); }
 
+// Aparece no histórico do GitHub, para saber de onde veio cada alteração
+export function deviceName() {
+  const ua = navigator.userAgent;
+  if (/iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return 'iPad';
+  if (/iPhone/.test(ua)) return 'iPhone';
+  if (/Android/.test(ua)) return 'Android';
+  if (/Windows/.test(ua)) return 'PC';
+  if (/Macintosh/.test(ua)) return 'Mac';
+  return 'outro aparelho';
+}
+
 export function ghConfig() {
   const s = settings();
   let repo = s.ghRepo;
@@ -66,7 +77,7 @@ async function pushRemote(text, head) {
   const commit = await ghJSON('/git/commits/' + head);
   const blob = await ghJSON('/git/blobs', { method: 'POST', body: { content: b64encode(text), encoding: 'base64' } });
   const tree = await ghJSON('/git/trees', { method: 'POST', body: { base_tree: commit.tree.sha, tree: [{ path: PATH, mode: '100644', type: 'blob', sha: blob.sha }] } });
-  const next = await ghJSON('/git/commits', { method: 'POST', body: { message: 'Estante: atualização ' + new Date().toLocaleString('pt-BR'), tree: tree.sha, parents: [head] } });
+  const next = await ghJSON('/git/commits', { method: 'POST', body: { message: 'Estante (' + deviceName() + '): atualização ' + new Date().toLocaleString('pt-BR'), tree: tree.sha, parents: [head] } });
   await ghJSON('/git/refs/heads/' + branch, { method: 'PATCH', body: { sha: next.sha, force: false } });
 }
 

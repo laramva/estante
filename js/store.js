@@ -11,8 +11,9 @@ export const emptyState = () => ({
   titles: {},
   entries: {},
   lists: {},
-  deleted: { lists: {} },
+  deleted: { lists: {}, titles: {} },
   sync: { filmowAt: null, imdbAt: null },
+  migrations: {},
   updatedAt: null,
 });
 
@@ -123,7 +124,7 @@ export function findTitle({ imdbId, tmdbId, tmdbType, malId, filmowId, title, or
     if (imdbId && t.imdbId === imdbId) return t;
     if (tmdbId && t.tmdbId === tmdbId && (!tmdbType || t.tmdbType === tmdbType)) return t;
     if (malId && t.malId === malId) return t;
-    if (filmowId && t.filmowId === filmowId) return t;
+    if (filmowId && (t.filmowId === filmowId || (t.filmowIds || []).includes(filmowId))) return t;
   }
   const names = [title, originalTitle].filter(Boolean).map(norm);
   if (!names.length || !year) return null;
@@ -193,6 +194,65 @@ export function setProgress(key, season, count) {
   commit();
 }
 
+// ---------- Temporadas (como no Filmow: cada temporada é marcada separadamente) ----------
+export const seasonOf = (key, n) => ((state.entries[key] || {}).seasons || {})[n] || {};
+function ensureSeason(key, n) {
+  const e = ensureEntry(key);
+  e.seasons = e.seasons || {};
+  const s = (e.seasons[n] = e.seasons[n] || {});
+  s.updatedAt = now();
+  return s;
+}
+// Série toda vista quando todas as temporadas conhecidas estão vistas
+function syncSeriesFlag(e, totalSeasons) {
+  const watchedN = Object.values(e.seasons || {}).filter((s) => s.watched).length;
+  if (totalSeasons && watchedN >= totalSeasons) { if (!e.watched) { e.watched = true; e.watchedAt = now(); } e.watchlist = false; }
+  else if (e.watched && !e.approx && watchedN < (totalSeasons || 0)) e.watched = false;
+}
+export function setSeasonWatched(key, n, on, { episodes, totalSeasons } = {}) {
+  const s = ensureSeason(key, n);
+  const e = state.entries[key];
+  s.watched = on;
+  s.watchedAt = on ? now() : null;
+  s.approx = false;
+  if (on) { s.watchlist = false; s.watchlistAt = null; if (episodes) e.progress = Object.assign({}, e.progress, { [n]: episodes }); }
+  syncSeriesFlag(e, totalSeasons);
+  e.updatedAt = now();
+  commit();
+}
+export function setSeasonWatchlist(key, n, on) {
+  const s = ensureSeason(key, n);
+  s.watchlist = on;
+  s.watchlistAt = on ? now() : null;
+  s.approxWl = false;
+  if (on) { s.watched = false; s.watchedAt = null; }
+  state.entries[key].updatedAt = now();
+  commit();
+}
+export function setSeasonRating(key, n, rating) {
+  const s = ensureSeason(key, n);
+  s.rating = rating;
+  s.ratedAt = rating == null ? null : now();
+  s.approxRated = false;
+  if (rating != null && !s.watched) { s.watched = true; s.watchedAt = now(); s.watchlist = false; }
+  state.entries[key].updatedAt = now();
+  commit();
+}
+export function setSeasonDate(key, n, iso) {
+  const s = ensureSeason(key, n);
+  s.watchedAt = iso; s.approx = false;
+  state.entries[key].updatedAt = now();
+  commit();
+}
+
+// Some com um título (ex.: duplicata unificada) sem deixar que outro aparelho o traga de volta
+export function tombstone(key) {
+  delete state.titles[key];
+  delete state.entries[key];
+  state.deleted.titles = state.deleted.titles || {};
+  state.deleted.titles[key] = now();
+}
+
 // ---------- Listas personalizadas ----------
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 export function createList(name, description = '') {
@@ -239,7 +299,20 @@ export function mergeStates(a, b) {
   for (const [k, e] of Object.entries(a.entries || {})) {
     const o = out.entries[k];
     out.entries[k] = !o || later(e.updatedAt, o.updatedAt) === 'a' ? e : o;
+    // Temporadas: cada uma vale pela última alteração, mesmo que a série tenha mudado nos dois aparelhos
+    if (o && (e.seasons || o.seasons)) {
+      const seasons = Object.assign({}, o.seasons);
+      for (const [n, s] of Object.entries(e.seasons || {})) if (!seasons[n] || later(s.updatedAt, seasons[n].updatedAt) === 'a') seasons[n] = s;
+      out.entries[k] = Object.assign({}, out.entries[k], { seasons });
+    }
   }
+  // Títulos unificados/apagados em um aparelho não voltam pelo outro
+  out.deleted.titles = Object.assign({}, b.deleted && b.deleted.titles, a.deleted && a.deleted.titles);
+  for (const [k, ts] of Object.entries(out.deleted.titles)) {
+    const e = out.entries[k];
+    if (!e || (e.updatedAt || '') <= ts) { delete out.titles[k]; delete out.entries[k]; }
+  }
+  out.migrations = Object.assign({}, b.migrations, a.migrations);
   out.deleted.lists = Object.assign({}, b.deleted && b.deleted.lists, a.deleted && a.deleted.lists);
   const lists = Object.assign({}, b.lists);
   for (const [k, l] of Object.entries(a.lists || {})) {
@@ -267,29 +340,36 @@ export const TABS = {
   comentarios: { label: 'Comentários', field: 'comment', date: 'commentAt' },
 };
 
+// Cada item tem: key, t (título), e (entrada), season (nº ou null), f (onde ficam as marcações: a temporada ou a entrada),
+// rating (a nota daquele item) e date. Séries com temporadas marcadas aparecem por temporada, como no Filmow.
+const SEASON_TABS = { 'ja-vi': 1, 'quero-ver': 1, avaliacoes: 1 };
 export function itemsFor(tab, kind) {
   const def = TABS[tab];
   const out = [];
   for (const [key, e] of Object.entries(state.entries)) {
-    const v = e[def.field];
-    if (v == null || v === false || v === '') continue;
     const t = state.titles[key];
     if (!t || (kind && kind !== 'all' && t.kind !== kind)) continue;
-    out.push({ key, t, e, date: e[def.date] || e.watchedAt || e.updatedAt });
+    const seasons = SEASON_TABS[tab] ? Object.entries(e.seasons || {}).filter(([, s]) => s[def.field] != null && s[def.field] !== false) : [];
+    for (const [n, s] of seasons) out.push({ key, t, e, season: +n, f: s, rating: s.rating, date: s[def.date] || s.watchedAt || e.updatedAt });
+    const v = e[def.field];
+    if (v == null || v === false || v === '') continue;
+    // Série marcada por temporada: a série inteira só aparece em "Já vi"/"Quero ver" se nenhuma temporada estiver marcada
+    if (seasons.length && tab !== 'avaliacoes') continue;
+    out.push({ key, t, e, season: null, f: e, rating: e.rating, date: e[def.date] || e.watchedAt || e.updatedAt });
   }
   return out.sort((x, y) => (y.date || '').localeCompare(x.date || ''));
 }
 
 export function stats() {
   const s = { watched: 0, watchlist: 0, favorite: 0, rated: 0, sum: 0, minutes: 0, byKind: { movie: 0, series: 0, anime: 0 } };
-  for (const [key, e] of Object.entries(state.entries)) {
-    const t = state.titles[key];
-    if (!t) continue;
-    if (e.watched) { s.watched++; s.byKind[t.kind] = (s.byKind[t.kind] || 0) + 1; if (t.kind === 'movie' && t.runtime) s.minutes += t.runtime; }
-    if (e.watchlist) s.watchlist++;
-    if (e.favorite) s.favorite++;
-    if (e.rating != null) { s.rated++; s.sum += e.rating; }
+  for (const x of itemsFor('ja-vi')) {
+    s.watched++;
+    s.byKind[x.t.kind] = (s.byKind[x.t.kind] || 0) + 1;
+    if (x.t.kind === 'movie' && x.t.runtime) s.minutes += x.t.runtime;
   }
+  s.watchlist = itemsFor('quero-ver').length;
+  s.favorite = itemsFor('favoritos').length;
+  for (const x of itemsFor('avaliacoes')) { s.rated++; s.sum += x.rating; }
   s.avg = s.rated ? s.sum / s.rated / 2 : 0;
   return s;
 }

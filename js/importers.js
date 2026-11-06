@@ -1,5 +1,5 @@
 // Importa dados do IMDb e do Filmow para a Estante, unificando títulos repetidos.
-import { state, upsertTitle, findTitle, commit, mergeStates, replaceState, createList } from './store.js';
+import { state, upsertTitle, findTitle, commit, mergeStates, replaceState, createList, tombstone } from './store.js';
 import { now, norm, sleep } from './util.js';
 import { search, searchCatalog, searchAnime, hasTmdb } from './meta.js';
 
@@ -146,6 +146,7 @@ export async function importFilmow(data, onProgress = () => {}) {
       // Já existe (veio do IMDb): só completa o que falta, mantendo o português
       const cur = state.titles[key];
       if (!cur.filmowId) cur.filmowId = fid;
+      cur.filmowIds = [...new Set([...(cur.filmowIds || []), fid])];
       if (!cur.filmowUrl) cur.filmowUrl = t.url;
       if (!cur.plot || cur.plotLang === 'en') { cur.plot = t.plot || cur.plot; cur.plotLang = t.plot ? 'pt' : cur.plotLang; }
       if (cur.source !== 'imdb' && t.title) cur.title = t.title;
@@ -153,7 +154,7 @@ export async function importFilmow(data, onProgress = () => {}) {
     } else {
       // Novo: dados do Filmow em português + ids encontrados online
       upsertTitle(Object.assign({}, found || {}, filmowData, {
-        key, filmowId: fid, filmowUrl: t.url, source: 'filmow',
+        key, filmowId: fid, filmowIds: [fid], filmowUrl: t.url, source: 'filmow',
         kind: found && found.kind === 'anime' ? 'anime' : found && found.kind ? found.kind : t.kind,
         poster: (found && found.poster) || t.poster,
         ratings: Object.assign({}, found && found.ratings, t.filmowRating ? { filmow: t.filmowRating } : {}),
@@ -171,6 +172,15 @@ export async function importFilmow(data, onProgress = () => {}) {
       const fresh = !known || !known.sources.includes('filmow');
       const approxDate = new Date(new Date(anchor).getTime() - (firstSync ? (i + 1) * 60000 : 0)).toISOString();
       // Num sync posterior, títulos novos no Filmow ganham a data de hoje (foram marcados desde o último sync)
+      const season = data.titles[x.id] && data.titles[x.id].season;
+      if (season) {
+        const e = state.entries[key] || (state.entries[key] = { sources: [], updatedAt: now() });
+        if (!e.sources.includes('filmow')) e.sources.push('filmow');
+        const had = e.seasons && e.seasons[season];
+        applySeason(e, season, x, firstSync, had ? null : firstSync ? approxDate : now());
+        e.updatedAt = now();
+        return;
+      }
       applyEntry(key, Object.assign({}, x, { addedAt: x.addedAt || (fresh ? approxDate : null), approx: !x.addedAt && firstSync, ratedAt: x.addedAt || (fresh ? approxDate : null) }), 'filmow');
     });
   }
@@ -229,17 +239,74 @@ function rekey(oldKey, found) {
       if (b.watched) { b.watchlist = false; b.watchlistAt = null; }
       if (b.rating == null && a.rating != null) { b.rating = a.rating; b.ratedAt = a.ratedAt; b.approxRated = a.approxRated; }
       if (!b.comment && a.comment) { b.comment = a.comment; b.commentAt = a.commentAt; }
+      b.seasons = Object.assign({}, a.seasons, b.seasons);
+      b.progress = Object.assign({}, a.progress, b.progress);
       b.sources = [...new Set([...(b.sources || []), ...(a.sources || [])])];
       b.updatedAt = now();
     }
-    delete state.entries[oldKey];
   }
   for (const l of Object.values(state.lists)) {
     if (!l.items.some((x) => x.key === oldKey)) continue;
     l.items = l.items.filter((x) => x.key !== oldKey || !l.items.some((y) => y.key === newKey)).map((x) => (x.key === oldKey ? Object.assign({}, x, { key: newKey }) : x));
     l.updatedAt = now();
   }
-  delete state.titles[oldKey];
+  tombstone(oldKey);
+}
+
+// Coloca cada marcação de temporada do Filmow na temporada certa
+function applySeason(e, n, x, ap, when) {
+  e.seasons = e.seasons || {};
+  const s = (e.seasons[n] = e.seasons[n] || {});
+  const better = (cur, curAp) => when && (!cur || (curAp && !ap) || (!!curAp === ap && when < cur));
+  if (x.list === 'watched' || x.list === 'favorites' || x.rating != null) {
+    if (!s.watched) { s.watched = true; s.watchedAt = when; s.approx = ap; }
+    else if (better(s.watchedAt, s.approx)) { s.watchedAt = when; s.approx = ap; }
+    s.watchlist = false; s.watchlistAt = null;
+  }
+  if (x.rating != null && (s.rating == null || (!ap && s.approxRated))) { s.rating = x.rating; s.ratedAt = when; s.approxRated = ap; }
+  if (x.list === 'watchlist' && !s.watched && !s.watchlist) { s.watchlist = true; s.watchlistAt = when; s.approxWl = ap; }
+  if (x.list === 'favorites' && !e.favorite) { e.favorite = true; e.favoriteAt = when; e.approxFav = ap; }
+}
+
+// Migração única: a primeira importação juntou as temporadas do Filmow na série inteira (e às vezes duplicou séries).
+// Aqui cada temporada volta a ser marcada separadamente, como no Filmow.
+export async function migrateFilmowSeasons() {
+  if (state.migrations && state.migrations.seasons1) return null;
+  const r = await fetch('data/filmow-seasons.json', { cache: 'no-cache' });
+  if (!r.ok) return null;
+  const data = await r.json();
+  const byFid = {};
+  for (const t of Object.values(state.titles)) if (t.filmowId) (byFid[t.filmowId] = byFid[t.filmowId] || []).push(t.key);
+  // Mesma âncora da importação: data aproximada = âncora - (posição + 1) minutos
+  let anchor = null;
+  for (const ref of data.anchorRef) {
+    const k = (byFid[ref.fid] || [])[0];
+    const e = k && state.entries[k];
+    if (e && e.approx && e.watchedAt) { anchor = new Date(e.watchedAt).getTime() + (ref.i + 1) * 60000; break; }
+  }
+  if (anchor == null) anchor = new Date('2026-07-01T00:00:00Z').getTime();
+  let fixedSeries = 0, merged = 0;
+  for (const g of data.series) {
+    const keys = [...new Set(g.fids.flatMap((f) => byFid[f] || []))].filter((k) => state.titles[k]);
+    if (!keys.length) continue;
+    const main = keys.find((k) => !k.startsWith('filmow-')) || keys[0];
+    for (const k of keys) if (k !== main) { rekey(k, state.titles[main]); merged++; }
+    const t = state.titles[main];
+    t.title = g.name;
+    t.filmowIds = [...new Set([...(t.filmowIds || []), ...g.fids])];
+    if (t.kind === 'movie') t.kind = 'series';
+    const e = state.entries[main] || (state.entries[main] = { sources: ['filmow'], updatedAt: now() });
+    for (const x of g.items) applySeason(e, x.n, x, true, new Date(anchor - (x.i + 1) * 60000).toISOString());
+    // As marcações que vieram das temporadas do Filmow agora moram nas temporadas
+    if (e.approxRated) { e.rating = null; e.ratedAt = null; e.approxRated = false; }
+    if (e.approx) { e.watched = false; e.watchedAt = null; e.approx = false; }
+    if (e.approxWl) { e.watchlist = false; e.watchlistAt = null; e.approxWl = false; }
+    e.updatedAt = now();
+    fixedSeries++;
+  }
+  state.migrations = Object.assign({}, state.migrations, { seasons1: now() });
+  commit('import');
+  return { fixedSeries, merged };
 }
 
 // O Filmow não separa animes: animações são conferidas no AniList (nome + ano)

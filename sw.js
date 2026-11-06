@@ -1,5 +1,5 @@
 // Faz a Estante abrir e funcionar sem internet.
-const VERSION = 'estante-v3';
+const VERSION = 'estante-v4';
 const SHELL = ['./', 'index.html', 'css/app.css', 'js/app.js', 'js/util.js', 'js/store.js', 'js/meta.js', 'js/sync.js', 'js/importers.js', 'icon.svg', 'icon-180.png', 'manifest.webmanifest', 'tools/filmow-export.js', 'tools/imdb-export.js'];
 
 self.addEventListener('install', (e) => {
