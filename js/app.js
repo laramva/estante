@@ -106,7 +106,46 @@ async function router() {
   }
   location.hash = '#/';
 }
-window.addEventListener('hashchange', () => { router(); window.scrollTo(0, 0); });
+// ---------- Voltar ----------
+// Pilha das páginas visitadas nesta sessão + posição da rolagem de cada uma,
+// para o botão Voltar levar de volta ao mesmo ponto (no iPad, pelo ícone, não existe o voltar do navegador).
+const navStack = [location.hash || '#/'];
+const scrollMemo = {};
+const backBtn = $('#back');
+function updateBack() {
+  const here = location.hash || '#/';
+  backBtn.hidden = navStack.length <= 1 && (here === '#/' || here === '#');
+}
+async function restoreScroll(y) {
+  // Listas longas carregam aos poucos: abre mais itens até caber a posição salva
+  for (let i = 0; i < 40 && document.documentElement.scrollHeight - innerHeight < y; i++) {
+    const more = $('#shelf-more button') || $('#ex-more');
+    if (!more) break;
+    more.click();
+    await new Promise((r) => setTimeout(r, 30));
+  }
+  window.scrollTo(0, y);
+  setTimeout(() => { if (Math.abs(window.scrollY - y) > 40) window.scrollTo(0, y); }, 700);
+}
+backBtn.addEventListener('click', () => {
+  if (navStack.length > 1) history.back();
+  else location.hash = '#/';
+});
+window.addEventListener('hashchange', async (ev) => {
+  const oldHash = new URL(ev.oldURL).hash || '#/';
+  const newHash = location.hash || '#/';
+  scrollMemo[oldHash] = window.scrollY;
+  navStack[navStack.length - 1] = oldHash;
+  const isBack = navStack.length > 1 && navStack[navStack.length - 2] === newHash;
+  if (isBack) navStack.pop();
+  else navStack.push(newHash);
+  if (navStack.length > 60) navStack.splice(0, navStack.length - 60);
+  updateBack();
+  if (!isBack) window.scrollTo(0, 0);
+  await router();
+  if (isBack && scrollMemo[newHash]) restoreScroll(scrollMemo[newHash]);
+});
+updateBack();
 
 // Re-renderiza a página atual quando os dados mudam (ex.: sincronização chegou)
 let rerenderLock = false;
@@ -990,10 +1029,56 @@ function paintChrome() {
 }
 onSyncStatus((st) => { $('#sync-dot').className = 'sync-dot ' + st.state; $('#sync-dot').parentElement.title = { ok: 'Sincronizado', syncing: 'Sincronizando…', error: 'Erro na sincronização', offline: 'Offline', readonly: 'Somente leitura (sem token)' }[st.state] || ''; });
 
+// ---------- Atualização automática do site ----------
+// No iPad o app aberto pela tela de início pode ficar dias sem recarregar. Ao abrir/voltar (e a cada 30 min)
+// ele confere version.json; se mudou, salva o que estiver pendente e recarrega sozinho.
+let loadedVersion = null;
+async function fetchVersion() {
+  try { return (await (await fetch('version.json?t=' + Date.now(), { cache: 'no-store' })).json()).version; } catch { return null; }
+}
+async function checkForUpdate() {
+  if (!navigator.onLine) return;
+  const v = await fetchVersion();
+  if (!v) return;
+  if (!loadedVersion) { loadedVersion = v; return; }
+  if (v === loadedVersion) return;
+  // Não interrompe quem está digitando um comentário
+  const typing = document.activeElement && /TEXTAREA|INPUT/.test(document.activeElement.tagName) && document.activeElement.value;
+  if (typing) return;
+  toast('Atualizando a Estante…', 'ok');
+  try { await syncNow(); } catch {}
+  try { const reg = await navigator.serviceWorker.getRegistration(); if (reg) await reg.update(); } catch {}
+  setTimeout(() => location.reload(), 600);
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkForUpdate(); });
+window.addEventListener('focus', () => checkForUpdate());
+setInterval(checkForUpdate, 30 * 60e3);
+
 // ---------- Início do app ----------
 const scheduleSync = debounce(() => syncNow(), 8000);
 S.onChange((reason) => { if (reason !== 'replace') scheduleSync(); rerender(); paintChrome(); });
 window.addEventListener('online', () => syncNow());
+// Traz as mudanças feitas no outro aparelho mesmo com esta tela parada aberta
+setInterval(() => { if (document.visibilityState === 'visible' && navigator.onLine) syncNow(); }, 60e3);
+window.addEventListener('focus', () => syncNow());
+
+// Aviso fixo quando este aparelho NÃO está salvando no GitHub (mudanças ficam só aqui)
+function paintSyncBanner(st) {
+  let el = $('#sync-banner');
+  const show = st.state === 'readonly' || st.state === 'error';
+  if (!show) { if (el) el.remove(); return; }
+  if (!el) {
+    el = document.createElement('a');
+    el.id = 'sync-banner';
+    el.href = '#/config';
+    document.body.insertBefore(el, $('main'));
+  }
+  el.className = 'sync-banner ' + st.state;
+  el.innerHTML = st.state === 'readonly'
+    ? '<b>Este aparelho não está sincronizando.</b> O que você marcar aqui fica só aqui. Toque para conectar (leva 10 segundos com o QR do computador) →'
+    : '<b>Erro ao sincronizar:</b> ' + esc(st.error || '') + ' — toque para ver →';
+}
+onSyncStatus(paintSyncBanner);
 window.addEventListener('offline', () => $('#sync-dot').className = 'sync-dot offline');
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncNow(); });
 
@@ -1004,6 +1089,7 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
     if (seed) S.replaceState(seed);
   }
   paintChrome();
+  checkForUpdate();
   await router();
   dailyBackup();
   // Primeiro puxa o que veio dos outros aparelhos; depois a migração das temporadas (roda uma vez só, em qualquer aparelho)

@@ -56,6 +56,17 @@ button, input, select, textarea { font: inherit; color: inherit; }
   max-width: var(--maxw); margin: 0 auto; padding: 0 20px;
   height: 64px; display: flex; align-items: center; gap: 18px;
 }
+.back {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 36px; width: 36px; padding: 0; margin-right: -6px; flex-shrink: 0;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--blue-600);
+  font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; transition: .15s;
+}
+.back[hidden] { display: none; }
+.back svg { width: 18px; height: 18px; }
+.back span { display: none; }
+/* No celular/iPad em retrato o topo tem espaço: mostra a palavra "Voltar" */
+@media (max-width: 820px) { .back { width: auto; padding: 0 12px 0 8px; } .back span { display: inline; } }
+.back:hover { background: var(--blue-50); border-color: var(--blue-300); }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 22px; letter-spacing: -.02em; color: var(--blue-500); white-space: nowrap; }
 .brand .sparkle { width: 14px; height: 14px; fill: var(--blue-300); margin-top: -10px; }
 .brand:hover { color: var(--blue-600); }
@@ -389,6 +400,10 @@ footer { border-top: 1px solid var(--line); }
 .foot .line { flex: 1; height: 1px; background: var(--line); }
 .foot .heart { width: 13px; height: 13px; }
 .foot .num { color: var(--blue-400); font-weight: 600; }
+
+.sync-banner { display: block; text-align: center; padding: 10px 16px; font-size: 14px; background: #fff4d6; color: #7a5500; border-bottom: 1px solid #f3dfa3; }
+.sync-banner.error { background: #fde4e8; color: #8a2035; border-color: #f2c2cb; }
+.sync-banner:hover { color: inherit; filter: brightness(.98); }
 
 /* ---------- iPad / telas de toque ---------- */
 /* Sem mouse não existe "passar por cima": os botões rápidos ficam sempre visíveis */
