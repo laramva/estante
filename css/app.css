@@ -76,7 +76,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 .nav a:hover { color: var(--blue-600); background: var(--blue-50); }
 .nav a.active { color: var(--blue-700); background: var(--blue-100); }
-.search { position: relative; width: 210px; flex-shrink: 0; }
+.search { position: relative; width: 180px; flex-shrink: 0; }
 .search input {
   width: 100%; height: 40px; border: 1px solid var(--line); background: var(--blue-50);
   border-radius: 999px; padding: 0 16px 0 40px; font-size: 14px; outline: none; transition: .15s;
@@ -88,6 +88,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
   width: 38px; height: 38px; border-radius: 50%; background: var(--blue-200) center/cover no-repeat;
   display: grid; place-items: center; color: #fff; font-weight: 700; flex-shrink: 0; border: 2px solid #fff; box-shadow: 0 0 0 1px var(--line);
 }
+.gear { position: relative; width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; color: var(--blue-500); border: 1px solid var(--line); background: var(--paper); flex-shrink: 0; }
+.gear:hover { background: var(--blue-50); color: var(--blue-700); }
+.gear svg { width: 19px; height: 19px; }
+.gear .sync-dot { position: absolute; top: 1px; right: 1px; border: 2px solid #fff; width: 11px; height: 11px; }
 .sync-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); flex-shrink: 0; }
 .sync-dot.ok { background: var(--ok); }
 .sync-dot.syncing { background: var(--blue-400); animation: pulse 1s infinite alternate; }
