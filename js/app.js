@@ -111,7 +111,14 @@ async function router() {
 // para o botão Voltar levar de volta ao mesmo ponto (no iPad, pelo ícone, não existe o voltar do navegador).
 const navStack = [location.hash || '#/'];
 const scrollMemo = {};
-const backBtn = $('#back');
+// Cria o botão se a página veio de uma versão antiga do index.html (cache do GitHub Pages)
+const backBtn = $('#back') || (() => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'back'; b.id = 'back'; b.hidden = true; b.title = 'Voltar'; b.setAttribute('aria-label', 'Voltar');
+  b.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg><span>Voltar</span>';
+  $('.topbar-in').prepend(b);
+  return b;
+})();
 function updateBack() {
   const here = location.hash || '#/';
   backBtn.hidden = navStack.length <= 1 && (here === '#/' || here === '#');
