@@ -3,7 +3,8 @@ import * as S from './store.js';
 import { state } from './store.js';
 import * as M from './meta.js';
 import { importFile, migrateFilmowSeasons } from './importers.js';
-import { syncNow, onSyncStatus, syncStatus, ghConfig, canPush, testToken, pullPublic } from './sync.js';
+import { syncNow, onSyncStatus, syncStatus, ghConfig, canPush, testToken, pullPublic, startCloudWatch } from './sync.js';
+import { initCloud, cloudUser, onUser, signIn, signUp, signOut, resetPassword, getPrivate, setPrivate } from './cloud.js';
 
 const app = $('#app');
 const hints = new Map(); // títulos vindos de busca/vitrines ainda não salvos na estante
@@ -751,8 +752,71 @@ function calItem(t, date, label) {
     '<div class="small muted">' + (e.rating != null ? starsHTML(e.rating) + ' ' : '') + (e.watchlist ? 'no seu Quero ver' : e.watched ? 'você acompanha' : '') + '</div></a>';
 }
 
+// ---------- Conta (entrar / criar conta) ----------
+route(/^\/conta$/, async () => {
+  app.innerHTML = loading();
+  await initCloud().catch(() => null);
+  const user = cloudUser();
+  if (user) {
+    app.innerHTML = '<section class="card pad auth">' + sparkle('deco') + '<div class="kicker">sua conta</div><h1 class="h-section" style="font-size:34px">Conectada' + sparkle() + '</h1><div class="rule"></div>' +
+      '<p>Você está usando a conta <b>' + esc(user.email) + '</b> neste aparelho. Tudo sincroniza sozinho com os outros aparelhos em que você entrar.</p>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:18px"><a class="btn primary" href="#/">Ir para a estante</a><a class="btn" href="#/config">Configurações</a></div></section>';
+    return;
+  }
+  app.innerHTML = '<section class="card pad auth">' + sparkle('deco') +
+    '<div class="kicker">sua conta</div><h1 class="h-section" style="font-size:34px">Entrar' + sparkle() + '</h1><div class="rule"></div>' +
+    '<p class="muted" style="margin-top:0">Use o mesmo email e senha em qualquer celular, tablet ou computador e sua estante aparece igual em todos.</p>' +
+    '<form id="authform" autocomplete="on">' +
+      '<div class="field"><label for="aemail">Email</label><input class="input" id="aemail" type="email" autocomplete="username" required placeholder="voce@email.com"></div>' +
+      '<div class="field" style="margin-top:12px"><label for="apass">Senha</label><input class="input" id="apass" type="password" autocomplete="current-password" required minlength="6" placeholder="mínimo 6 caracteres"></div>' +
+      '<div class="auth-actions"><button class="btn primary" type="submit" id="alogin">Entrar</button><button class="btn" type="button" id="asignup">Criar conta</button></div>' +
+      '<button class="btn ghost sm" type="button" id="areset" style="margin-top:8px">Esqueci minha senha</button>' +
+      '<p class="hint" id="amsg"></p>' +
+    '</form></section>';
+  const email = $('#aemail'), pass = $('#apass'), msg = $('#amsg');
+  const busy = (on) => $$('#authform button').forEach((b) => (b.disabled = on));
+  const done = async (text) => {
+    toast(text, 'ok');
+    await afterLogin();
+    location.hash = '#/';
+  };
+  $('#authform').onsubmit = async (ev) => {
+    ev.preventDefault();
+    busy(true); msg.textContent = 'Entrando…';
+    try { await signIn(email.value, pass.value); await done('Conta conectada! Sincronizando…'); }
+    catch (e) { msg.textContent = e.message; }
+    finally { busy(false); }
+  };
+  $('#asignup').onclick = async () => {
+    if (!email.value || pass.value.length < 6) { msg.textContent = 'Digite um email e uma senha de pelo menos 6 caracteres.'; return; }
+    busy(true); msg.textContent = 'Criando sua conta…';
+    try { await signUp(email.value, pass.value); await done('Conta criada! Sua estante foi salva nela.'); }
+    catch (e) { msg.textContent = e.message; }
+    finally { busy(false); }
+  };
+  $('#areset').onclick = async () => {
+    if (!email.value) { msg.textContent = 'Digite seu email acima e toque de novo em “Esqueci minha senha”.'; email.focus(); return; }
+    try { await resetPassword(email.value); msg.textContent = 'Enviamos um email para ' + email.value + ' com o link para criar uma nova senha (veja também o spam).'; }
+    catch (e) { msg.textContent = e.message; }
+  };
+});
+
+// Depois de entrar: traz a chave do TMDB da conta (ou guarda a deste aparelho nela) e sincroniza
+async function afterLogin() {
+  try {
+    const priv = await getPrivate();
+    const local = S.settings().tmdbKey;
+    if (priv.tmdbKey && priv.tmdbKey !== local) S.saveSettings({ tmdbKey: priv.tmdbKey });
+    else if (local && !priv.tmdbKey) await setPrivate({ tmdbKey: local });
+  } catch (e) { console.warn('preferências da conta', e); }
+  startCloudWatch();
+  await syncNow(true);
+}
+
 // ---------- Configurações, sincronização e backup ----------
 route(/^\/config$/, async () => {
+  await initCloud().catch(() => null);
+  const user = cloudUser();
   const s = S.settings();
   const gc = ghConfig();
   const st = syncStatus();
@@ -760,26 +824,26 @@ route(/^\/config$/, async () => {
   const nTitles = Object.keys(state.titles).length;
   app.innerHTML = '<div class="kicker">sincronizar e configurar</div><h1 class="h-section" style="font-size:36px">Configurações' + sparkle() + '</h1><div class="rule"></div>' +
     '<div class="settings">' +
-    // GitHub
-    '<section class="card pad full"><h3>' + sparkle() + 'Sincronização (GitHub)</h3>' +
-      '<p>Sua estante fica salva neste aparelho (funciona offline) e é copiada para <code>data/library.json</code> no seu repositório do GitHub sempre que algo muda. Assim ela aparece igual em qualquer aparelho, com histórico de todas as versões.</p>' +
+    // Conta
+    '<section class="card pad full"><h3>' + sparkle() + 'Sua conta</h3>' +
+      (user
+        ? '<p>Conectada como <b>' + esc(user.email) + '</b>. Tudo o que você marca aqui aparece em qualquer aparelho em que você entrar com essa conta — na hora.</p>'
+        : '<p>Entre com sua conta para sincronizar este aparelho. Em qualquer celular, tablet ou computador: abra a Estante, entre com o mesmo email e senha, e pronto.</p>') +
       '<div class="status-line" id="sync-line"></div>' +
-      '<dl class="kv" style="margin:14px 0"><dt>Repositório</dt><dd>' + esc(gc.repo || '—') + '</dd><dt>Última sincronização</dt><dd>' + (s.lastSync ? fmtDate(s.lastSync) + ' ' + new Date(s.lastSync).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : 'nunca') + '</dd><dt>Títulos</dt><dd>' + nTitles + '</dd></dl>' +
-      '<details' + (canPush() ? '' : ' open') + '><summary style="cursor:pointer;font-weight:600;color:var(--blue-600)">' + (canPush() ? 'Trocar token' : 'Ativar sincronização neste aparelho') + '</summary>' +
+      '<dl class="kv" style="margin:14px 0"><dt>Última sincronização</dt><dd>' + (s.lastSync ? fmtDate(s.lastSync) + ' ' + new Date(s.lastSync).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : 'nunca') + '</dd><dt>Títulos</dt><dd>' + nTitles + '</dd></dl>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap">' +
+        (user ? '<button class="btn sm" id="syncnow">Sincronizar agora</button><button class="btn sm danger" id="logout">Sair da conta neste aparelho</button>' : '<a class="btn primary sm" href="#/conta">Entrar ou criar conta</a>') +
+      '</div>' +
+    '</section>' +
+    // GitHub (avançado)
+    '<section class="card pad full"><details><summary style="cursor:pointer;font-weight:600;color:var(--blue-600)">Backup extra no GitHub (opcional, avançado)</summary>' +
+      '<p>Além da conta, este aparelho pode guardar uma cópia em <code>data/library.json</code> no repositório ' + esc(gc.repo || '') + ' (com histórico de versões). Não é necessário para sincronizar.</p>' +
+      '<details><summary style="cursor:pointer;font-weight:600;color:var(--blue-600)">' + (canPush() ? 'Trocar token' : 'Ativar backup no GitHub neste aparelho') + '</summary>' +
         '<ol class="steps"><li>Abra <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">github.com/settings/personal-access-tokens/new</a>.</li><li>Nome: <b>Estante</b> · Expiração: <b>No expiration</b> (ou 1 ano).</li><li>Repository access: <b>Only select repositories</b> → escolha <b>' + esc(gc.repo || 'o repositório da Estante') + '</b>.</li><li>Permissions → Repository → <b>Contents: Read and write</b>.</li><li>Gere o token, copie e cole abaixo. Ele fica só neste aparelho.</li></ol>' +
         '<div class="my" style="margin-top:0"><div class="field"><label>Repositório (usuário/nome)</label><input class="input" id="ghrepo" value="' + esc(gc.repo || '') + '" placeholder="seu-usuario/estante"></div>' +
         '<div class="field"><label>Token do GitHub</label><input class="input" id="ghtoken" type="password" autocomplete="off" placeholder="github_pat_…" value="' + (s.ghToken ? '••••••••••' : '') + '"></div></div>' +
         '<div style="display:flex;gap:10px;margin-top:12px"><button class="btn primary sm" id="ghsave">Testar e salvar</button>' + (s.ghToken ? '<button class="btn sm danger" id="ghforget">Esquecer token</button>' : '') + '</div></details>' +
-      '<div style="margin-top:16px"><button class="btn sm" id="syncnow">Sincronizar agora</button></div>' +
-    '</section>' +
-    // Outro aparelho
-    '<section class="card pad full"><h3>' + sparkle() + 'Conectar outro aparelho (iPad, celular)</h3>' +
-      (canPush()
-        ? '<p>No iPad, abra a Estante pelo ícone, vá em Configurações e toque em <b>“Escanear QR do computador”</b>. Depois aponte a câmera para o código abaixo. O iPad recebe a sincronização com o GitHub e a chave do TMDB de uma vez — nada é enviado pela internet.</p>' +
-          '<button class="btn primary sm" id="pairshow">Mostrar QR de conexão</button><div id="pairbox"></div>'
-        : '<p>Este aparelho ainda não está sincronizando. Se você já ativou a sincronização no computador, abra lá Configurações → “Mostrar QR de conexão” e escaneie aqui:</p>') +
-      '<div style="margin-top:12px"><button class="btn sm" id="pairscan">Escanear QR do computador</button></div><div id="scanbox"></div>' +
-    '</section>' +
+    '</details></section>' +
     // TMDB
     '<section class="card pad"><h3>' + sparkle() + 'Dados dos filmes (TMDB)</h3>' +
       '<p>Com a chave gratuita do TMDB você ganha sinopses em português, lançamentos no Brasil, onde assistir e temporadas. Sem ela, a Estante usa Cinemeta (IMDb) e AniList.</p>' +
@@ -828,8 +892,13 @@ route(/^\/config$/, async () => {
     catch (e) { S.saveSettings({ ghToken: prev.ghToken, ghRepo: prev.ghRepo }); toast(e.message, 'error'); }
   };
   if ($('#ghforget')) $('#ghforget').onclick = () => { S.saveSettings({ ghToken: '' }); router(); };
-  if ($('#pairshow')) $('#pairshow').onclick = showPairQR;
-  $('#pairscan').onclick = scanPairQR;
+  if ($('#logout')) $('#logout').onclick = async () => {
+    if (!confirm('Sair da conta neste aparelho? Sua estante continua salva na conta.')) return;
+    await signOut();
+    S.saveSettings({ cloudUid: null, cloudRev: 0, cloudHash: null });
+    toast('Você saiu da conta neste aparelho', 'ok');
+    router();
+  };
   $('#tmdbsave').onclick = async () => {
     const k = $('#tmdbkey').value.trim();
     if (k.startsWith('•')) return;
@@ -838,6 +907,7 @@ route(/^\/config$/, async () => {
       const r = await fetch('https://api.themoviedb.org/3/configuration?api_key=' + encodeURIComponent(k));
       if (!r.ok) throw new Error();
       S.saveSettings({ tmdbKey: k });
+      setPrivate({ tmdbKey: k }).catch(() => {}); // vale para todos os aparelhos da conta
       toast('Chave do TMDB ativa ✓', 'ok');
       router();
       backgroundRefresh(true);
@@ -875,71 +945,6 @@ route(/^\/config$/, async () => {
     replaceAndSync(S.mergeStates(state, data));
   }));
 });
-
-// ---------- Parear aparelhos por QR (tela -> câmera, sem passar pela internet) ----------
-const PAIR_PREFIX = 'ESTANTE1:';
-function loadScript(src) {
-  return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('Não consegui carregar ' + src)); document.head.appendChild(s); });
-}
-
-async function showPairQR() {
-  const box = $('#pairbox');
-  const s = S.settings();
-  const gc = ghConfig();
-  const payload = PAIR_PREFIX + btoa(JSON.stringify({ r: gc.repo, b: gc.branch, g: s.ghToken, t: s.tmdbKey || '' }));
-  if (!window.qrcode) await loadScript('vendor/qrcode.min.js');
-  const qr = window.qrcode(0, 'M');
-  qr.addData(payload);
-  qr.make();
-  box.innerHTML = '<div class="pair"><div class="qr"><img alt="QR de conexão" src="' + qr.createDataURL(6, 2) + '"></div>' +
-    '<div><p style="margin-top:0"><b>Escaneie pelo iPad.</b> Este código dá permissão para salvar na sua estante — não mande foto dele para ninguém.</p><p class="hint" id="pairleft">Some sozinho em 2 minutos.</p><button class="btn sm" id="pairhide">Esconder</button></div></div>';
-  $('#pairshow').classList.add('hidden');
-  const hide = () => { box.innerHTML = ''; const b = $('#pairshow'); if (b) b.classList.remove('hidden'); };
-  $('#pairhide').onclick = hide;
-  setTimeout(hide, 120000);
-}
-
-async function scanPairQR() {
-  const box = $('#scanbox');
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { toast('Este navegador não deixa usar a câmera aqui.', 'error'); return; }
-  box.innerHTML = '<div class="scan"><video playsinline muted></video></div><p class="hint">Aponte para o QR na tela do computador.</p><button class="btn sm" id="scanstop">Cancelar</button>';
-  let stream;
-  const stop = () => { if (stream) stream.getTracks().forEach((t) => t.stop()); box.innerHTML = ''; };
-  $('#scanstop').onclick = stop;
-  try {
-    if (!window.jsQR) await loadScript('vendor/jsQR.min.js');
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
-  } catch (e) { stop(); toast(e.name === 'NotAllowedError' ? 'Permita o uso da câmera para escanear.' : e.message, 'error'); return; }
-  const video = $('video', box);
-  video.srcObject = stream;
-  await video.play();
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  const tick = async () => {
-    if (!document.body.contains(video)) return;
-    if (video.readyState >= 2) {
-      const w = 480, h = Math.round((video.videoHeight / video.videoWidth) * 480) || 480;
-      canvas.width = w; canvas.height = h;
-      ctx.drawImage(video, 0, 0, w, h);
-      const code = window.jsQR(ctx.getImageData(0, 0, w, h).data, w, h);
-      if (code && code.data.startsWith(PAIR_PREFIX)) {
-        stop();
-        try {
-          const p = JSON.parse(atob(code.data.slice(PAIR_PREFIX.length)));
-          const prev = S.settings();
-          S.saveSettings({ ghRepo: p.r, ghBranch: p.b || 'main', ghToken: p.g, tmdbKey: p.t || prev.tmdbKey });
-          await testToken();
-          toast('iPad conectado! Sincronizando…', 'ok');
-          await syncNow();
-          router();
-        } catch (e) { toast('Não deu certo: ' + e.message, 'error'); }
-        return;
-      }
-    }
-    requestAnimationFrame(tick);
-  };
-  requestAnimationFrame(tick);
-}
 
 function replaceAndSync(s) { S.replaceState(s); toast('Backup restaurado', 'ok'); syncNow(); }
 
@@ -1069,23 +1074,27 @@ window.addEventListener('online', () => syncNow());
 setInterval(() => { if (document.visibilityState === 'visible' && navigator.onLine) syncNow(); }, 60e3);
 window.addEventListener('focus', () => syncNow());
 
-// Aviso fixo quando este aparelho NÃO está salvando no GitHub (mudanças ficam só aqui)
-function paintSyncBanner(st) {
+// Aviso fixo quando este aparelho não está na sua conta (o que marcar aqui fica só aqui) ou deu erro
+let cloudChecked = false;
+function paintSyncBanner(st = syncStatus()) {
   let el = $('#sync-banner');
-  const show = st.state === 'readonly' || st.state === 'error';
-  if (!show) { if (el) el.remove(); return; }
+  const noAccount = cloudChecked && !cloudUser();
+  const show = noAccount || st.state === 'error';
+  if (!show || location.hash === '#/conta') { if (el) el.remove(); return; }
   if (!el) {
     el = document.createElement('a');
     el.id = 'sync-banner';
-    el.href = '#/config';
     document.body.insertBefore(el, $('main'));
   }
-  el.className = 'sync-banner ' + st.state;
-  el.innerHTML = st.state === 'readonly'
-    ? '<b>Este aparelho não está sincronizando.</b> O que você marcar aqui fica só aqui. Toque para conectar (leva 10 segundos com o QR do computador) →'
+  el.href = noAccount ? '#/conta' : '#/config';
+  el.className = 'sync-banner ' + (noAccount ? 'readonly' : 'error');
+  el.innerHTML = noAccount
+    ? '<b>Este aparelho não está na sua conta.</b> O que você marcar aqui fica só aqui. Toque para entrar com email e senha →'
     : '<b>Erro ao sincronizar:</b> ' + esc(st.error || '') + ' — toque para ver →';
 }
 onSyncStatus(paintSyncBanner);
+window.addEventListener('hashchange', () => paintSyncBanner());
+onUser(() => { cloudChecked = true; paintSyncBanner(); });
 window.addEventListener('offline', () => $('#sync-dot').className = 'sync-dot offline');
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncNow(); });
 
@@ -1099,8 +1108,13 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
   checkForUpdate();
   await router();
   dailyBackup();
+  // Conta: se já entrou neste aparelho, fica ouvindo as mudanças dos outros aparelhos em tempo real
+  const cloud = await initCloud().catch((e) => { console.warn('conta indisponível', e); return null; });
+  cloudChecked = !!cloud;
+  paintSyncBanner();
+  if (cloudUser()) afterLogin().catch(() => {});
   // Primeiro puxa o que veio dos outros aparelhos; depois a migração das temporadas (roda uma vez só, em qualquer aparelho)
-  syncNow().then(async () => {
+  (cloudUser() ? Promise.resolve() : syncNow()).then(async () => {
     const r = await migrateFilmowSeasons().catch((e) => { console.warn('migração', e); return null; });
     if (r) { toast('Séries organizadas por temporada ✓', 'ok'); syncNow(); }
     backgroundRefresh();

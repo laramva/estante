@@ -1,6 +1,6 @@
 // Faz a Estante abrir e funcionar sem internet.
-const VERSION = 'estante-v5';
-const SHELL = ['./', 'index.html', 'css/app.css', 'js/app.js', 'js/util.js', 'js/store.js', 'js/meta.js', 'js/sync.js', 'js/importers.js', 'icon.svg', 'icon-180.png', 'manifest.webmanifest', 'tools/filmow-export.js', 'tools/imdb-export.js'];
+const VERSION = 'estante-v6';
+const SHELL = ['./', 'index.html', 'css/app.css', 'js/app.js', 'js/util.js', 'js/store.js', 'js/meta.js', 'js/sync.js', 'js/importers.js', 'js/cloud.js', 'js/firebase-config.js', 'icon.svg', 'icon-180.png', 'manifest.webmanifest', 'tools/filmow-export.js', 'tools/imdb-export.js'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -38,7 +38,7 @@ self.addEventListener('fetch', (e) => {
   }
 
   // APIs de filmes: rede primeiro, cache se estiver offline
-  if (/themoviedb\.org|strem\.io|fonts\.(googleapis|gstatic)\.com/.test(url.hostname)) {
+  if (/themoviedb\.org|strem\.io|fonts\.(googleapis|gstatic)\.com|www\.gstatic\.com/.test(url.hostname)) {
     e.respondWith(fetch(req).then((res) => {
       if (res.ok) caches.open('estante-api').then((c) => { c.put(req, res.clone()); trim('estante-api', 800); });
       return res;

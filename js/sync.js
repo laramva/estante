@@ -2,6 +2,7 @@
 // Cada aparelho guarda tudo offline e, quando tem internet, mescla com o GitHub.
 import { state, settings, saveSettings, mergeStates, replaceState } from './store.js';
 import { now, sleep } from './util.js';
+import { initCloud, cloudUser, getMeta, pullBlob, pushCloud, watchCloud } from './cloud.js';
 
 const PATH = 'data/library.json';
 let status = { state: 'idle', at: null, error: null };
@@ -92,25 +93,86 @@ export async function pullPublic() {
 
 let running = null;
 let again = false;
-export function syncNow() {
+export function syncNow(force) {
   if (running) { again = true; return running; }
   running = (async () => {
     try {
-      do { again = false; await doSync(); } while (again);
+      do { again = false; await doSync(force); } while (again);
     } finally { running = null; }
   })();
   return running;
 }
 
-async function doSync() {
+// Sincronização principal: a conta (Firebase). O GitHub vira só backup extra no aparelho que tiver token.
+let lastGithub = 0;
+async function doSync(force) {
   if (!navigator.onLine) { setStatus({ state: 'offline' }); return; }
-  if (!canPush()) {
+  await initCloud().catch(() => null);
+  const user = cloudUser();
+  if (!user && !canPush()) {
     const pub = await pullPublic();
     if (pub && pub.updatedAt !== state.updatedAt) replaceState(mergeStates(state, pub));
     setStatus({ state: 'readonly', at: now(), error: null });
     return;
   }
   setStatus({ state: 'syncing', error: null });
+  if (user) {
+    try { await cloudSync(user); }
+    catch (e) { setStatus({ state: 'error', error: e.message }); return; }
+  }
+  // Backup no GitHub: no máximo a cada 10 minutos quando a conta já está sincronizando
+  if (canPush() && (!user || force || Date.now() - lastGithub > 10 * 60e3)) {
+    lastGithub = Date.now();
+    await githubSync(!!user);
+  } else setStatus({ state: 'ok', at: now(), error: null });
+}
+
+// Assinatura curta do conteúdo, para saber se algo mudou desde a última sincronização
+function hash(str) {
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < str.length; i++) { const c = str.charCodeAt(i); h1 = Math.imul(h1 ^ c, 2654435761); h2 = Math.imul(h2 ^ c, 1597334677); }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (h2 >>> 0).toString(16) + (h1 >>> 0).toString(16);
+}
+
+async function cloudSync(user) {
+  let s = settings();
+  let knownRev = s.cloudUid === user.uid ? s.cloudRev || 0 : -1;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const meta = await getMeta();
+    const localStr = JSON.stringify(state);
+    // Nada mudou nem aqui nem na nuvem: não baixa nada (economiza internet e o limite gratuito)
+    if (meta.rev === knownRev && hash(localStr) === s.cloudHash) { saveSettings({ lastSync: now() }); return; }
+    if (meta.rev !== knownRev && meta.rev > 0) {
+      const data = await pullBlob(meta);
+      if (data) {
+        const merged = mergeStates(state, data);
+        if (JSON.stringify(merged) !== localStr) replaceState(merged);
+        const after = JSON.stringify(state);
+        if (JSON.stringify(data) === after) { s = saveSettings({ cloudUid: user.uid, cloudRev: meta.rev, cloudHash: hash(after), lastSync: now() }); return; }
+      }
+    }
+    try {
+      const rev = await pushCloud(state, meta.rev, deviceName());
+      s = saveSettings({ cloudUid: user.uid, cloudRev: rev, cloudHash: hash(JSON.stringify(state)), lastSync: now() });
+      return;
+    } catch (e) {
+      if (!e.conflict) throw e;
+      knownRev = -1; // outro aparelho gravou no meio: baixa de novo e mescla
+      await sleep(400 * (attempt + 1));
+    }
+  }
+  throw new Error('Não consegui salvar na conta (muitas alterações ao mesmo tempo). Tente de novo.');
+}
+
+// Avisa este aparelho na hora em que outro gravar na conta
+export function startCloudWatch() {
+  if (!cloudUser()) return;
+  watchCloud((meta) => { if (meta.rev !== settings().cloudRev) syncNow(); });
+}
+
+async function githubSync(isBackup) {
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
       const { data, head } = await pullRemote();
@@ -124,11 +186,16 @@ async function doSync() {
     } catch (e) {
       // 422 = o branch andou (outro aparelho gravou): busca de novo, mescla e tenta outra vez
       const retry = e.status === 422 || e.status === 409 || /fetch|network/i.test(e.message);
-      if (attempt === 3 || !retry) { setStatus({ state: 'error', error: e.message }); return; }
+      if (attempt === 3 || !retry) {
+        // Com a conta funcionando, falha no backup do GitHub não é erro para você
+        if (isBackup) { console.warn('backup GitHub', e); setStatus({ state: 'ok', at: now(), error: null }); }
+        else setStatus({ state: 'error', error: e.message });
+        return;
+      }
       await sleep(1000 * (attempt + 1));
     }
   }
-  setStatus({ state: 'error', error: 'Conflito persistente ao salvar. Tente de novo.' });
+  setStatus({ state: isBackup ? 'ok' : 'error', error: isBackup ? null : 'Conflito persistente ao salvar. Tente de novo.' });
 }
 
 export async function testToken() {
