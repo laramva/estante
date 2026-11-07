@@ -536,6 +536,20 @@ function bindTitle(t) {
   }));
 }
 
+// Pergunta de confirmação dentro do site (no lugar da janelinha do navegador)
+function ask(message, okLabel = 'Confirmar') {
+  return new Promise((resolve) => {
+    const bg = document.createElement('div');
+    bg.className = 'modal-bg';
+    bg.innerHTML = '<div class="modal card" role="alertdialog" aria-modal="true"><p style="margin:0 0 18px;font-size:15px">' + esc(message) + '</p>' +
+      '<div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn sm" data-a="0">Cancelar</button><button class="btn sm primary" data-a="1">' + esc(okLabel) + '</button></div></div>';
+    const done = (v) => { bg.remove(); resolve(v); };
+    bg.addEventListener('click', (e) => { const b = e.target.closest('[data-a]'); if (b) done(b.dataset.a === '1'); else if (e.target === bg) done(false); });
+    document.body.appendChild(bg);
+    $('[data-a="1"]', bg).focus();
+  });
+}
+
 function listsModal(key, done) {
   const bg = document.createElement('div');
   bg.className = 'modal-bg';
@@ -694,7 +708,7 @@ function editListModal(id) {
     else { const nid = S.createList(name, $('#ld', bg).value.trim()); location.hash = '#/lista/' + nid; }
     close(); router();
   };
-  if (id) $('#del', bg).onclick = () => { if (confirm('Excluir a lista “' + l.name + '”? Os títulos continuam na sua estante.')) { S.deleteList(id); close(); location.hash = '#/listas'; } };
+  if (id) $('#del', bg).onclick = async () => { close(); if (await ask('Excluir a lista “' + l.name + '”? Os títulos continuam na sua estante.', 'Excluir')) { S.deleteList(id); location.hash = '#/listas'; } };
 }
 
 route(/^\/lista\/([\w]+)$/, async ([id]) => {
@@ -900,7 +914,7 @@ route(/^\/config$/, async () => {
     $('#devices').innerHTML = list.length ? '<ul class="devices">' + list.map((d) => '<li><span class="sync-dot ' + (Date.now() - new Date(d.at) < 15 * 60e3 ? 'ok' : '') + '"></span><b>' + esc(d.name) + '</b>' + (d.mine ? ' (este)' : '') + ' — sincronizou ' + ago(d.at) + (d.rev === curRev ? ' · em dia ✓' : '') + '</li>').join('') + '</ul>' : 'Nenhum ainda.';
   }).catch(() => { $('#devices').textContent = 'Não consegui carregar agora.'; });
   if ($('#logout')) $('#logout').onclick = async () => {
-    if (!confirm('Sair da conta neste aparelho? Sua estante continua salva na conta.')) return;
+    if (!(await ask('Sair da conta neste aparelho? Sua estante continua salva na conta.', 'Sair'))) return;
     await signOut();
     S.saveSettings({ cloudUid: null, cloudRev: 0, cloudHash: null });
     toast('Você saiu da conta neste aparelho', 'ok');
@@ -947,7 +961,7 @@ route(/^\/config$/, async () => {
   $('#bk').onclick = () => download('estante-backup-' + new Date().toISOString().slice(0, 10) + '.json', JSON.stringify(state));
   $('#bkcsv').onclick = () => download('estante-' + new Date().toISOString().slice(0, 10) + '.csv', toCSV(), 'text/csv');
   $$('[data-restore]').forEach((b) => (b.onclick = async () => {
-    if (!confirm('Mesclar o backup de ' + fmtDate(b.dataset.restore.slice(7)) + ' com a estante atual?')) return;
+    if (!(await ask('Mesclar o backup de ' + fmtDate(b.dataset.restore.slice(7)) + ' com a estante atual?', 'Restaurar'))) return;
     const data = await S.__idbGet(b.dataset.restore);
     replaceAndSync(S.mergeStates(state, data));
   }));
