@@ -117,7 +117,8 @@ export async function pushCloud(state, baseRev, device) {
     if (meta === null && baseRev !== 0) return { rev: -1 };
     const cur = (meta && meta.rev) || 0;
     if (cur !== baseRev) return; // aborta: outro aparelho gravou antes
-    return { rev: Math.floor(rev), blob: key, size: blob.length, updatedAt: new Date().toISOString(), device };
+    // v: versão do formato. A regra do banco só aceita gravações com v === 2 (barra versões antigas do site)
+    return { v: 2, rev: Math.floor(rev), blob: key, size: blob.length, updatedAt: new Date().toISOString(), device };
   });
   if (!res.committed) {
     await d.remove(path('blobs/' + key)).catch(() => {});
