@@ -130,6 +130,12 @@ export async function pushCloud(state, baseRev, device) {
 }
 
 // Apaga as cópias antigas. Lista só os NOMES (nunca baixa as cópias em si, que são grandes).
+let cleanedThisSession = false;
+export function cleanupOnce() {
+  if (cleanedThisSession || !current) return;
+  cleanedThisSession = true;
+  getMeta().then((m) => cleanupBlobs(m.blob)).catch((e) => console.warn('limpeza', e));
+}
 async function cleanupBlobs(keep) {
   const { d } = fb;
   const names = new Set(Object.keys((await d.get(path('blobIndex'))).val() || {}));
