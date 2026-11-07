@@ -2,7 +2,7 @@
 // Cada aparelho guarda tudo offline e, quando tem internet, mescla com o GitHub.
 import { state, settings, saveSettings, mergeStates, replaceState, canon } from './store.js';
 import { now, sleep } from './util.js';
-import { initCloud, cloudUser, getMeta, pullBlob, pushCloud, watchCloud } from './cloud.js';
+import { initCloud, cloudUser, getMeta, pullBlob, pushCloud, watchCloud, checkIn } from './cloud.js';
 
 const PATH = 'data/library.json';
 let status = { state: 'idle', at: null, error: null };
@@ -119,6 +119,7 @@ async function doSync(force) {
   if (user) {
     try { await cloudSync(user); }
     catch (e) { setStatus({ state: 'error', error: e.message }); return; }
+    checkIn(deviceName(), settings().cloudRev).catch(() => {});
   }
   // Backup no GitHub: no máximo a cada 10 minutos quando a conta já está sincronizando
   if (canPush() && (!user || force || Date.now() - lastGithub > 10 * 60e3)) {

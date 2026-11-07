@@ -130,6 +130,27 @@ export async function pushCloud(state, baseRev, device) {
   return Math.floor(rev);
 }
 
+// "Aparelhos conectados": cada aparelho registra quando sincronizou pela última vez (poucos bytes)
+function deviceId() {
+  let id = null;
+  try { id = localStorage.getItem('estante-device-id'); } catch {}
+  if (!id) {
+    id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    try { localStorage.setItem('estante-device-id', id); } catch {}
+  }
+  return id;
+}
+export async function checkIn(name, rev) {
+  if (!current) return;
+  await fb.d.set(path('devices/' + deviceId()), { name, rev, at: new Date().toISOString(), ua: navigator.userAgent.slice(0, 160) });
+}
+export async function listDevices() {
+  await initCloud();
+  if (!current) return [];
+  const all = (await fb.d.get(path('devices'))).val() || {};
+  return Object.entries(all).map(([id, d]) => Object.assign({ id, mine: id === deviceId() }, d)).sort((a, b) => (b.at || '').localeCompare(a.at || ''));
+}
+
 // Preferências da conta que valem em todo aparelho (ex.: chave do TMDB). Só a própria conta lê.
 export async function getPrivate() {
   await initCloud();

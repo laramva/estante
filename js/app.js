@@ -4,7 +4,7 @@ import { state } from './store.js';
 import * as M from './meta.js';
 import { importFile, migrateFilmowSeasons } from './importers.js';
 import { syncNow, onSyncStatus, syncStatus, ghConfig, canPush, testToken, pullPublic, startCloudWatch } from './sync.js';
-import { initCloud, cloudUser, onUser, signIn, signUp, signOut, resetPassword, getPrivate, setPrivate } from './cloud.js';
+import { initCloud, cloudUser, onUser, signIn, signUp, signOut, resetPassword, getPrivate, setPrivate, listDevices } from './cloud.js';
 
 const app = $('#app');
 const hints = new Map(); // títulos vindos de busca/vitrines ainda não salvos na estante
@@ -831,6 +831,7 @@ route(/^\/config$/, async () => {
         : '<p>Entre com sua conta para sincronizar este aparelho. Em qualquer celular, tablet ou computador: abra a Estante, entre com o mesmo email e senha, e pronto.</p>') +
       '<div class="status-line" id="sync-line"></div>' +
       '<dl class="kv" style="margin:14px 0"><dt>Última sincronização</dt><dd>' + (s.lastSync ? fmtDate(s.lastSync) + ' ' + new Date(s.lastSync).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : 'nunca') + '</dd><dt>Títulos</dt><dd>' + nTitles + '</dd></dl>' +
+      (user ? '<div class="field" style="margin:4px 0 16px"><label>Aparelhos conectados</label><div id="devices" class="hint" style="margin:0">carregando…</div></div>' : '') +
       '<div style="display:flex;gap:10px;flex-wrap:wrap">' +
         (user ? '<button class="btn sm" id="syncnow">Sincronizar agora</button><button class="btn sm danger" id="logout">Sair da conta neste aparelho</button>' : '<a class="btn primary sm" href="#/conta">Entrar ou criar conta</a>') +
       '</div>' +
@@ -892,6 +893,12 @@ route(/^\/config$/, async () => {
     catch (e) { S.saveSettings({ ghToken: prev.ghToken, ghRepo: prev.ghRepo }); toast(e.message, 'error'); }
   };
   if ($('#ghforget')) $('#ghforget').onclick = () => { S.saveSettings({ ghToken: '' }); router(); };
+  // Lista de aparelhos da conta e quando cada um sincronizou pela última vez
+  if ($('#devices')) listDevices().then((list) => {
+    const ago = (iso) => { const m = Math.round((Date.now() - new Date(iso)) / 60000); return m < 1 ? 'agora' : m < 60 ? 'há ' + m + ' min' : m < 1440 ? 'há ' + Math.round(m / 60) + ' h' : fmtDate(iso); };
+    const curRev = S.settings().cloudRev;
+    $('#devices').innerHTML = list.length ? '<ul class="devices">' + list.map((d) => '<li><span class="sync-dot ' + (Date.now() - new Date(d.at) < 15 * 60e3 ? 'ok' : '') + '"></span><b>' + esc(d.name) + '</b>' + (d.mine ? ' (este)' : '') + ' — sincronizou ' + ago(d.at) + (d.rev === curRev ? ' · em dia ✓' : '') + '</li>').join('') + '</ul>' : 'Nenhum ainda.';
+  }).catch(() => { $('#devices').textContent = 'Não consegui carregar agora.'; });
   if ($('#logout')) $('#logout').onclick = async () => {
     if (!confirm('Sair da conta neste aparelho? Sua estante continua salva na conta.')) return;
     await signOut();
