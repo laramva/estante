@@ -1,6 +1,6 @@
 // Sincronização com o GitHub: o arquivo data/library.json do repositório é a cópia oficial.
 // Cada aparelho guarda tudo offline e, quando tem internet, mescla com o GitHub.
-import { state, settings, saveSettings, mergeStates, replaceState } from './store.js';
+import { state, settings, saveSettings, mergeStates, replaceState, canon } from './store.js';
 import { now, sleep } from './util.js';
 import { initCloud, cloudUser, getMeta, pullBlob, pushCloud, watchCloud } from './cloud.js';
 
@@ -136,26 +136,33 @@ function hash(str) {
   return (h2 >>> 0).toString(16) + (h1 >>> 0).toString(16);
 }
 
+// Trava de segurança: se por algum motivo um aparelho começar a regravar sem parar, ele pausa
+const pushTimes = [];
 async function cloudSync(user) {
   let s = settings();
   let knownRev = s.cloudUid === user.uid ? s.cloudRev || 0 : -1;
   for (let attempt = 0; attempt < 5; attempt++) {
     const meta = await getMeta();
-    const localStr = JSON.stringify(state);
+    // Compara pelo conteúdo (chaves em ordem), não pela ordem em que os dados foram montados
+    const localCanon = canon(state);
     // Nada mudou nem aqui nem na nuvem: não baixa nada (economiza internet e o limite gratuito)
-    if (meta.rev === knownRev && hash(localStr) === s.cloudHash) { saveSettings({ lastSync: now() }); return; }
+    if (meta.rev === knownRev && hash(localCanon) === s.cloudHash) { saveSettings({ lastSync: now() }); return; }
     if (meta.rev !== knownRev && meta.rev > 0) {
       const data = await pullBlob(meta);
       if (data) {
         const merged = mergeStates(state, data);
-        if (JSON.stringify(merged) !== localStr) replaceState(merged);
-        const after = JSON.stringify(state);
-        if (JSON.stringify(data) === after) { s = saveSettings({ cloudUid: user.uid, cloudRev: meta.rev, cloudHash: hash(after), lastSync: now() }); return; }
+        const mergedCanon = canon(merged);
+        if (mergedCanon !== localCanon) replaceState(merged);
+        if (canon(data) === mergedCanon) { s = saveSettings({ cloudUid: user.uid, cloudRev: meta.rev, cloudHash: hash(mergedCanon), lastSync: now() }); return; }
       }
     }
+    const t = Date.now();
+    while (pushTimes.length && t - pushTimes[0] > 120e3) pushTimes.shift();
+    if (pushTimes.length >= 8) throw new Error('Muitas gravações seguidas — pausando 2 minutos por segurança.');
+    pushTimes.push(t);
     try {
       const rev = await pushCloud(state, meta.rev, deviceName());
-      s = saveSettings({ cloudUid: user.uid, cloudRev: rev, cloudHash: hash(JSON.stringify(state)), lastSync: now() });
+      s = saveSettings({ cloudUid: user.uid, cloudRev: rev, cloudHash: hash(canon(state)), lastSync: now() });
       return;
     } catch (e) {
       if (!e.conflict) throw e;
@@ -177,9 +184,8 @@ async function githubSync(isBackup) {
     try {
       const { data, head } = await pullRemote();
       const merged = data ? mergeStates(state, data) : state;
-      if (data && JSON.stringify(merged) !== JSON.stringify(state)) replaceState(merged);
-      const localStr = JSON.stringify(state);
-      if (!data || JSON.stringify(data) !== localStr) await pushRemote(localStr, head);
+      if (data && canon(merged) !== canon(state)) replaceState(merged);
+      if (!data || canon(data) !== canon(state)) await pushRemote(JSON.stringify(state), head);
       saveSettings({ lastSync: now() });
       setStatus({ state: 'ok', at: now(), error: null });
       return;

@@ -280,54 +280,70 @@ export function toggleInList(id, key, on) {
 }
 export const listsWith = (key) => Object.values(state.lists).filter((l) => l.items.some((i) => i.key === key));
 
-// ---------- Mesclagem (outro aparelho / GitHub / backup) ----------
+// ---------- Mesclagem (outro aparelho / conta / backup) ----------
 // Regra: em cada item vence quem foi alterado por último. Nada é apagado sem registro.
-const later = (a, b) => ((a || '') >= (b || '') ? 'a' : 'b');
+// Em caso de empate, a escolha não pode depender de qual aparelho está mesclando — senão dois aparelhos
+// ficam regravando a versão um do outro para sempre. Por isso o desempate compara o conteúdo.
+
+// JSON com as chaves em ordem: o mesmo conteúdo vira sempre o mesmo texto, em qualquer aparelho
+export function canon(x) {
+  if (x === null || typeof x !== 'object') return JSON.stringify(x) ?? 'null';
+  if (Array.isArray(x)) return '[' + x.map(canon).join(',') + ']';
+  return '{' + Object.keys(x).filter((k) => x[k] !== undefined).sort().map((k) => JSON.stringify(k) + ':' + canon(x[k])).join(',') + '}';
+}
+function pick(a, b, ta, tb) {
+  ta = ta || ''; tb = tb || '';
+  if (ta !== tb) return ta > tb ? a : b;
+  return canon(a) >= canon(b) ? a : b;
+}
+// Junta dois mapas {chave: valor} com chaves em ordem alfabética (serialização estável)
+function mergeMaps(ma = {}, mb = {}, fn) {
+  const out = {};
+  for (const k of [...new Set([...Object.keys(ma), ...Object.keys(mb)])].sort()) {
+    const x = ma[k], y = mb[k];
+    out[k] = x === undefined ? y : y === undefined ? x : fn(x, y, k);
+  }
+  return out;
+}
 
 export function mergeStates(a, b) {
   if (!b) return a;
   if (!a) return b;
   const out = emptyState();
-  out.profile = later(a.profileAt, b.profileAt) === 'a' ? Object.assign({}, b.profile, a.profile) : Object.assign({}, a.profile, b.profile);
+  const pw = pick(a.profile || {}, b.profile || {}, a.profileAt, b.profileAt);
+  out.profile = Object.assign({}, pw === a.profile ? b.profile : a.profile, pw);
   out.profileAt = [a.profileAt, b.profileAt].sort().pop() || null;
-  out.titles = Object.assign({}, b.titles);
-  for (const [k, t] of Object.entries(a.titles || {})) {
-    const o = out.titles[k];
-    out.titles[k] = !o ? t : later(t.metaUpdatedAt, o.metaUpdatedAt) === 'a' ? Object.assign({}, o, t) : Object.assign({}, t, o);
-  }
-  out.entries = Object.assign({}, b.entries);
-  for (const [k, e] of Object.entries(a.entries || {})) {
-    const o = out.entries[k];
-    out.entries[k] = !o || later(e.updatedAt, o.updatedAt) === 'a' ? e : o;
+  out.titles = mergeMaps(a.titles, b.titles, (t, o) => {
+    const w = pick(t, o, t.metaUpdatedAt, o.metaUpdatedAt);
+    return Object.assign({}, w === t ? o : t, w);
+  });
+  out.entries = mergeMaps(a.entries, b.entries, (e, o) => {
+    const w = pick(e, o, e.updatedAt, o.updatedAt);
+    if (!e.seasons && !o.seasons) return w;
     // Temporadas: cada uma vale pela última alteração, mesmo que a série tenha mudado nos dois aparelhos
-    if (o && (e.seasons || o.seasons)) {
-      const seasons = Object.assign({}, o.seasons);
-      for (const [n, s] of Object.entries(e.seasons || {})) if (!seasons[n] || later(s.updatedAt, seasons[n].updatedAt) === 'a') seasons[n] = s;
-      out.entries[k] = Object.assign({}, out.entries[k], { seasons });
-    }
-  }
-  // Títulos unificados/apagados em um aparelho não voltam pelo outro
-  out.deleted.titles = Object.assign({}, b.deleted && b.deleted.titles, a.deleted && a.deleted.titles);
+    const seasons = mergeMaps(e.seasons, o.seasons, (s1, s2) => pick(s1, s2, s1.updatedAt, s2.updatedAt));
+    return Object.assign({}, w, { seasons });
+  });
+  // Títulos unificados/apagados em um aparelho não voltam pelo outro (vale a data mais antiga)
+  out.deleted.titles = mergeMaps(a.deleted && a.deleted.titles, b.deleted && b.deleted.titles, (x, y) => (x < y ? x : y));
   for (const [k, ts] of Object.entries(out.deleted.titles)) {
     const e = out.entries[k];
     if (!e || (e.updatedAt || '') <= ts) { delete out.titles[k]; delete out.entries[k]; }
   }
-  out.migrations = Object.assign({}, b.migrations, a.migrations);
-  out.deleted.lists = Object.assign({}, b.deleted && b.deleted.lists, a.deleted && a.deleted.lists);
-  const lists = Object.assign({}, b.lists);
-  for (const [k, l] of Object.entries(a.lists || {})) {
-    const o = lists[k];
-    lists[k] = !o || later(l.updatedAt, o.updatedAt) === 'a' ? l : o;
-  }
+  out.migrations = mergeMaps(a.migrations, b.migrations, (x, y) => (x < y ? x : y));
+  out.deleted.lists = mergeMaps(a.deleted && a.deleted.lists, b.deleted && b.deleted.lists, (x, y) => (x > y ? x : y));
+  const lists = mergeMaps(a.lists, b.lists, (l, o) => pick(l, o, l.updatedAt, o.updatedAt));
   for (const [k, l] of Object.entries(lists)) {
     const del = out.deleted.lists[k];
     if (!del || del < l.updatedAt) out.lists[k] = l;
   }
+  const max = (x, y) => ((x || '') >= (y || '') ? x : y) || null;
+  out.profileAt = max(a.profileAt, b.profileAt);
   out.sync = {
-    filmowAt: [a.sync && a.sync.filmowAt, b.sync && b.sync.filmowAt].sort().pop() || null,
-    imdbAt: [a.sync && a.sync.imdbAt, b.sync && b.sync.imdbAt].sort().pop() || null,
+    filmowAt: max(a.sync && a.sync.filmowAt, b.sync && b.sync.filmowAt),
+    imdbAt: max(a.sync && a.sync.imdbAt, b.sync && b.sync.imdbAt),
   };
-  out.updatedAt = [a.updatedAt, b.updatedAt].sort().pop() || null;
+  out.updatedAt = max(a.updatedAt, b.updatedAt);
   return out;
 }
 
