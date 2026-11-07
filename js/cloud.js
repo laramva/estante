@@ -111,7 +111,8 @@ export async function pushCloud(state, baseRev, device) {
   const blob = await gzipB64(JSON.stringify(state));
   const rev = baseRev + 1 + Math.floor(Math.random() * 1000) / 1000; // evita que dois aparelhos usem o mesmo nome de arquivo
   const key = String(rev).replace('.', '_');
-  await d.set(path('blobs/' + key), blob);
+  // A cópia e o registro dela no índice (o índice é pequeno; é por ele que a limpeza sabe o que apagar)
+  await d.update(path(''), { ['blobs/' + key]: blob, ['blobIndex/' + key]: true });
   const res = await d.runTransaction(path('meta'), (meta) => {
     // O Firebase chama primeiro com o valor em cache (pode vir vazio); devolvendo algo, ele confere com o servidor e chama de novo
     if (meta === null && baseRev !== 0) return { rev: -1 };
@@ -121,13 +122,34 @@ export async function pushCloud(state, baseRev, device) {
     return { v: 2, rev: Math.floor(rev), blob: key, size: blob.length, updatedAt: new Date().toISOString(), device };
   });
   if (!res.committed) {
-    await d.remove(path('blobs/' + key)).catch(() => {});
+    await d.update(path(''), { ['blobs/' + key]: null, ['blobIndex/' + key]: null }).catch(() => {});
     throw Object.assign(new Error('conflito'), { conflict: true });
   }
-  // Limpa versões antigas
-  const all = (await d.get(path('blobs'))).val() || {};
-  await Promise.all(Object.keys(all).filter((k) => k !== key).map((k) => d.remove(path('blobs/' + k)).catch(() => {})));
+  cleanupBlobs(key).catch((e) => console.warn('limpeza', e)); // em segundo plano: não segura a sincronização
   return Math.floor(rev);
+}
+
+// Apaga as cópias antigas. Lista só os NOMES (nunca baixa as cópias em si, que são grandes).
+async function cleanupBlobs(keep) {
+  const { d } = fb;
+  const names = new Set(Object.keys((await d.get(path('blobIndex'))).val() || {}));
+  // Uma vez por aparelho: procura sobras antigas que não estão no índice (listagem "rasa", só os nomes)
+  const flag = 'estante-blobs-limpos-' + current.uid;
+  let deep = false;
+  try { deep = !localStorage.getItem(flag); } catch {}
+  if (deep) {
+    const token = await fb.auth.currentUser.getIdToken();
+    const r = await fetch(firebaseConfig.databaseURL + '/users/' + current.uid + '/blobs.json?shallow=true&auth=' + encodeURIComponent(token));
+    if (r.ok) for (const k of Object.keys((await r.json()) || {})) names.add(k);
+  }
+  names.delete(keep);
+  const meta = (await d.get(path('meta'))).val();
+  if (meta && meta.blob) names.delete(meta.blob); // nunca apaga a cópia atual
+  const del = {};
+  // Só apaga versões anteriores à atual: a de outro aparelho que esteja gravando agora tem número maior
+  for (const k of names) if (meta && parseInt(k, 10) < meta.rev) { del['blobs/' + k] = null; del['blobIndex/' + k] = null; }
+  if (Object.keys(del).length) await d.update(path(''), del);
+  if (deep) try { localStorage.setItem(flag, '1'); } catch {}
 }
 
 // "Aparelhos conectados": cada aparelho registra quando sincronizou pela última vez (poucos bytes)
